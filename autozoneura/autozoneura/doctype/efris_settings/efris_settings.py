@@ -19,7 +19,7 @@ def test_efris_connection(docname):
     Called from the Test Connection button on EFRIS Settings form
     """
     try:
-        # Get the current EFRIS Settings document
+        # Retrieve EFRIS Settings document
         efris_doc = frappe.get_doc("EFRIS Settings", docname)
 
         # Validate required fields
@@ -36,7 +36,7 @@ def test_efris_connection(docname):
             'Content-Type': 'application/json',
         }
         
-        # Build the payload for server time request (T101 interface)
+        # Prepare the data payload to be posted to EFRIS 
         data = {
             "data": {
                 "content": "",
