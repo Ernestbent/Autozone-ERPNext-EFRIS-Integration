@@ -6,7 +6,7 @@ from frappe.utils.data import now
 import requests
 from datetime import datetime, timedelta, timezone
 
-# Define the East Africa Time (EAT) timezone, which is UTC+3
+# Define the date in African/Nairobi timezone format UTC+3
 eat_timezone = timezone(timedelta(hours=3))
 
 class EFRISSettings(Document):
