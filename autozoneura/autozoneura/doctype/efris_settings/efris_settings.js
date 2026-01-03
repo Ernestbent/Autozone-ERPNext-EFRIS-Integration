@@ -1,45 +1,43 @@
 frappe.ui.form.on('EFRIS Settings', {
     refresh: function(frm) {
-        // Refresh AES Key
-        frm.add_custom_button(__('Refresh AES Key'), function() {
+
+        // Button to test connection to EFRIS
+        frm.add_custom_button('Test Connection', function() {
             frappe.call({
-                method: 'autozoneura.autozoneura.background_tasks.efris_key_manager.test_efris_complete_flow',
+                method: 'autozoneura.autozoneura.doctype.efris_settings.efris_settings.test_efris_connection',
+                args: { docname: frm.doc.name },
                 freeze: true,
-                freeze_message: __('Getting AES Key...'),
+                freeze_message: 'Testing EFRIS Connection...',
                 callback: function(r) {
-                    if (r.message && r.message.success) {
-                        frappe.msgprint(__('AES Key refreshed successfully!'));
+                    if (r.message && r.message.status === 'success') {
+                        frappe.msgprint('Success');
+                    } else if (r.message && r.message.status === 'error') {
+                        frappe.msgprint('Connection Failed: ' + r.message.message);
                     } else {
-                        frappe.msgprint(__('Error: ' + (r.message.error || 'Unknown error')));
+                        frappe.msgprint('Unexpected response from server.');
                     }
                 }
             });
         });
-        
-        // Get UOMs
-        frm.add_custom_button(__('Get UOMs'), function() {
-            // IMPORTANT: Make sure document is saved
-            if (frm.is_new()) {
-                frappe.msgprint(__('Please save the document first'));
-                return;
-            }
-            
+
+        // Button to fetch UOMs from EFRIS
+        frm.add_custom_button('Get UOMs', function() {
             frappe.call({
                 method: 'autozoneura.autozoneura.utilities.efris_uoms.get_uoms_from_efris',
-                args: {
-                    docname: frm.doc.name
-                },
                 freeze: true,
-                freeze_message: __('Fetching UOMs...'),
+                freeze_message: 'Fetching UOMs from EFRIS...',
                 callback: function(r) {
-                    console.log('Response:', r);
                     if (r.message && r.message.status === 'success') {
                         frappe.msgprint(r.message.message);
-                    } else if (r.message) {
-                        frappe.msgprint(__('Error: ' + r.message.message));
+                        frm.reload_doc(); // Reload form to reflect updated UOMs
+                    } else if (r.message && r.message.status === 'error') {
+                        frappe.msgprint('Error: ' + r.message.message);
+                    } else {
+                        frappe.msgprint('Unexpected response from server.');
                     }
                 }
             });
         });
+
     }
 });
