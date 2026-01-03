@@ -148,23 +148,11 @@ app_license = "mit"
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-# 	"all": [
-# 		"autozoneura.tasks.all"
-# 	],
-# 	"daily": [
-# 		"autozoneura.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"autozoneura.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"autozoneura.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"autozoneura.tasks.monthly"
-# 	],
-# }
+scheduler_events = {
+	"daily": [
+		"autozoneura.autozoneura.background_tasks.efris_key_manager.test_efris_complete_flow"
+	],
+}
 
 # Testing
 # -------
