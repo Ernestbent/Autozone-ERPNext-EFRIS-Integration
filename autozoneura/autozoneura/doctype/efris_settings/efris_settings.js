@@ -1,40 +1,53 @@
 frappe.ui.form.on('EFRIS Settings', {
     refresh: function(frm) {
 
-        // Button to test connection to EFRIS
-        frm.add_custom_button('Test Connection', function() {
+        // Test Connection button
+        frm.add_custom_button(__('Test Connection'), function() {
             frappe.call({
-                method: 'autozoneura.autozoneura.doctype.efris_settings.efris_settings.test_efris_connection',
+                method: "autozoneura.autozoneura.doctype.efris_settings.efris_settings.test_efris_connection",
                 args: { docname: frm.doc.name },
                 freeze: true,
-                freeze_message: 'Testing EFRIS Connection...',
+                freeze_message: __("Testing connection..."),
                 callback: function(r) {
-                    if (r.message && r.message.status === 'success') {
-                        frappe.msgprint('Success');
-                    } else if (r.message && r.message.status === 'error') {
-                        frappe.msgprint('Connection Failed: ' + r.message.message);
+                    if (r.message && r.message.status === "success") {
+                        frappe.msgprint({
+                            title: __("Success"),
+                            message: JSON.stringify(r.message.message, null, 2),
+                            indicator: "green"
+                        });
                     } else {
-                        frappe.msgprint('Unexpected response from server.');
+                        frappe.msgprint({
+                            title: __("Error"),
+                            message: r.message ? r.message.message : __("Failed to connect"),
+                            indicator: "red"
+                        });
                     }
                 }
             });
         });
 
-        // Button to fetch UOMs from EFRIS
-        frm.add_custom_button('Get UOMs', function() {
+        // Sync UOMs button (your existing code)
+        frm.add_custom_button(__('Sync UOMs from EFRIS'), function() {
             frappe.call({
-                method: 'autozoneura.autozoneura.utilities.efris_uoms.get_uoms_from_efris',
+                method: "autozoneura.autozoneura.utilities.efris_uoms.get_uoms_from_efris",
+                args: { docname: frm.doc.name },
                 freeze: true,
-                freeze_message: 'Fetching UOMs from EFRIS...',
+                freeze_message: __("Syncing UOMs from EFRIS..."),
                 callback: function(r) {
-                    if (r.message && r.message.status === 'success') {
-                        frappe.msgprint(r.message.message);
-                        frm.reload_doc(); // Reload form to reflect updated UOMs
-                    } else if (r.message && r.message.status === 'error') {
-                        frappe.msgprint('Error: ' + r.message.message);
-                    } else {
-                        frappe.msgprint('Unexpected response from server.');
+                    if (r.message && r.message.status === "success") {
+                        frappe.msgprint({
+                            title: __("Success"),
+                            message: r.message.message,
+                            indicator: "green"
+                        });
                     }
+                },
+                error: function(r) {
+                    frappe.msgprint({
+                        title: __("Error"),
+                        message: __("Failed to sync UOMs. Check error log."),
+                        indicator: "red"
+                    });
                 }
             });
         });
