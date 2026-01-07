@@ -158,7 +158,7 @@ def on_stock(doc, event):
         
         return_message = response_data.get("returnStateInfo", {}).get("returnMessage", "")
         
-        # ALWAYS LOG RAW REQUEST/RESPONSE - NO DECODING
+        # Log Raw Request and Response
         log_integration_request('Completed' if response.status_code == 200 else 'Failed', 
                                server_url, headers, data_to_post, response_data,
                                f"HTTP {response.status_code}: {return_message}")
