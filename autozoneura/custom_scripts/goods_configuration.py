@@ -56,7 +56,7 @@ def on_save(doc, event):
         "operationType": operation_type,
         "goodsName": doc.item_name,
         "goodsCode": doc.item_code,
-        "measureUnit": "101",
+        "measureUnit": doc.custom_uom_code_efris,
         "unitPrice": doc.standard_rate,
         "currency": "101",
         "commodityCategoryId": doc.custom_goods_category_id,
@@ -79,19 +79,13 @@ def on_save(doc, event):
         "goodsOtherUnits": [],
     }]
 
-    # PRINT RAW GOODS DATA BEFORE ENCRYPTION
-    print("\n" + "="*80)
-    print("RAW GOODS DATA (BEFORE ENCRYPTION):")
-    print(json.dumps(goods_data, indent=2))
-    print("="*80 + "\n")
-
     # Encrypt the payload
     encrypted_result = encrypt_dynamic_json(goods_data)
 
     if not encrypted_result.get("success"):
         frappe.throw(encrypted_result.get("error"))
 
-    # Optional: DECRYPT ENCRYPTED CONTENT TO VERIFY BEFORE SENDING
+    # Decrypt the encryted content locally
     try:
         aes_key_hex = efris_settings.aes_key
         if not aes_key_hex:
@@ -103,10 +97,6 @@ def on_save(doc, event):
         decrypted_bytes = unpad(cipher.decrypt(encrypted_bytes), AES.block_size)
         decrypted_json = json.loads(decrypted_bytes.decode("utf-8"))
 
-        print("\n" + "="*80)
-        print("DECRYPTED CONTENT (VERIFYING ENCRYPTION):")
-        print(json.dumps(decrypted_json, indent=2))
-        print("="*80 + "\n")
     except Exception as e:
         print("Failed to decrypt encrypted content locally:", str(e))
 
@@ -146,24 +136,12 @@ def on_save(doc, event):
         "returnStateInfo": {}
     }
 
-    # PRINT FINAL PAYLOAD
-    print("\n" + "="*80)
-    print("FINAL PAYLOAD (TO BE SENT):")
-    print(json.dumps(payload, indent=2))
-    print("="*80 + "\n")
-
     headers = {"Content-Type": "application/json"}
 
     try:
         response = requests.post(server_url, json=payload, headers=headers, timeout=60)
         response.raise_for_status()
         response_data = response.json()
-
-        # PRINT RESPONSE
-        print("\n" + "="*80)
-        print("RESPONSE FROM EFRIS:")
-        print(json.dumps(response_data, indent=2))
-        print("="*80 + "\n")
 
         if response_data.get("returnStateInfo", {}).get("returnMessage") == "SUCCESS":
             frappe.msgprint("Item successfully synced with EFRIS")
@@ -174,9 +152,5 @@ def on_save(doc, event):
             frappe.throw(msg)
 
     except Exception as e:
-        print("\n" + "="*80)
-        print("ERROR OCCURRED:")
-        print(str(e))
-        print("="*80 + "\n")
         log_integration_request("Failed", server_url, headers, payload, {}, str(e))
         frappe.throw(str(e))

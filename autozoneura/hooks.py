@@ -142,6 +142,9 @@ doctype_js = {
 doc_events = {
     "Item": {
         "validate": "autozoneura.custom_scripts.goods_configuration.on_save"
+    },
+    "Purchase Receipt": {
+        "on_submit": "autozoneura.custom_scripts.stock_in.on_stock"
     }
 }
 
