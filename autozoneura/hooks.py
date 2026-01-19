@@ -44,8 +44,11 @@ app_license = "mit"
 
 # include js in doctype views
 doctype_js = {
-    "Item" : "public/js/goods_configuration.js"
-    }
+    "Item": "public/js/goods_configuration.js",
+    "Customer": "public/js/get_tax_payer_information.js"
+}
+
+    
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
@@ -145,6 +148,12 @@ doc_events = {
     },
     "Purchase Receipt": {
         "on_submit": "autozoneura.custom_scripts.stock_in.on_stock"
+    },
+    "Stock Entry": {
+        "on_submit": "autozoneura.custom_scripts.stock_adjustment.stock_adjust"
+    },
+    "Sales Invoice":{
+        "on_submit": "autozoneura.custom_scripts.upload_invoice.on_send"
     }
 }
 

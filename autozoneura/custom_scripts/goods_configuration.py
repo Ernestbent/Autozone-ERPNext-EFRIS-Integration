@@ -62,7 +62,7 @@ def on_save(doc, event):
         "commodityCategoryId": doc.custom_goods_category_id,
         "haveExciseTax": "102",
         "description": doc.description,
-        "stockPrewarning": "10",
+        "stockPrewarning": "0",
         "pieceMeasureUnit": "",
         "havePieceUnit": "102",
         "pieceUnitPrice": "",

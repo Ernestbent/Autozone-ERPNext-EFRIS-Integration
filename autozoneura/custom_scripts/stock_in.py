@@ -89,7 +89,7 @@ def on_stock(doc, event):
     if not encrypted_result.get("success"):
         frappe.throw(f"Encryption failed: {encrypted_result.get('error')}")
 
-    # Build final data to post
+    # Final Payload to send
     data_to_post = {
         "data": {
             "content": encrypted_result["encrypted_content"],
@@ -113,7 +113,7 @@ def on_stock(doc, event):
             "deviceNo": device_number,
             "tin": tin,
             "brn": brn,
-            "taxpayerID": "1",
+            "taxpayerID": "999000002030357",
             "longitude": "32.61665",
             "latitude": "0.36601",
             "agentType": "0",
