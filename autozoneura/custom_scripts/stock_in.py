@@ -164,7 +164,7 @@ def on_stock(doc, event):
                                f"HTTP {response.status_code}: {return_message}")
 
         # Store in document custom fields
-        doc.custom_post_request = json.dumps(data_to_post, indent=4)
+        doc.custom_post_request = json.dumps(data_to_post, indent=4) 
         doc.custom_response_ = json.dumps(response_data, indent=4)
         doc.custom_return_status = return_message
         

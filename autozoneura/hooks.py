@@ -44,8 +44,12 @@ app_license = "mit"
 
 # include js in doctype views
 doctype_js = {
-    "Item": "public/js/goods_configuration.js",
-    "Customer": "public/js/get_tax_payer_information.js"
+    "Item": [
+        "public/js/goods_configuration.js",
+        "public/js/efris_stock_button.js"
+    ],
+    "Customer": "public/js/get_tax_payer_information.js",
+    
 }
 
     
