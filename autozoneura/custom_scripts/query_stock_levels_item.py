@@ -82,11 +82,8 @@ def prepare_t127_payload(item, settings):
     
     # T127 - Goods/Services Inquiry Request Structure
     payload = {
-        "goodsCode": item.item_code or "",  # Item code to search
-        "goodsName": item.item_name or "",  # Item name
-        "commodityCategoryName": item.item_group or "",  # Category name
-        "pageNo": "1",  # Page number for pagination
-        "pageSize": "10",  # Records per page
+        "id":"501218921377060062",
+        "branchId":"431354597574840075"
     }
 
     return payload
@@ -124,7 +121,7 @@ def build_final_request(encrypted_result, settings):
             "appId": "AP04",
             "version": "1.1.20191201",
             "dataExchangeId": frappe.generate_hash(length=18),
-            "interfaceCode": "T127",  # Interface code for Goods/Services Inquiry
+            "interfaceCode": "T128",  # Interface code for Goods/Services Inquiry
             "requestCode": "TP",
             "requestTime": current_time,
             "responseCode": "TA",
@@ -237,16 +234,11 @@ def process_efris_response(response, item_code):
         encrypted_content = data.get("content", "")
         signature = data.get("signature", "")
         
-        # Note: You'll need to implement decryption here
-        # For now, return the encrypted content
+        
         # TODO: Add decryption using your decrypt function
         
         try:
-            # If you have a decrypt function, use it here:
-            # from autozoneura.autozoneura.background_tasks.encryption import decrypt_dynamic_json
-            # decrypted_data = decrypt_dynamic_json(encrypted_content, signature)
             
-            # For now, just parse if it's JSON
             content_data = json.loads(encrypted_content) if isinstance(encrypted_content, str) else encrypted_content
         except:
             content_data = encrypted_content
