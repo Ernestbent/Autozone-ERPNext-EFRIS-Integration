@@ -1,10 +1,3 @@
-"""
-EFRIS Key Manager
-Follows URA EFRIS API Specification
-- Gets AES key via T104 interface
-- AES key valid for 24 hours
-- passwordDes is encrypted with client's public key
-"""
 import base64
 import json
 import os

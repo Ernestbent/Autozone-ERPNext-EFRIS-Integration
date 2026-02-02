@@ -5,8 +5,6 @@ from datetime import datetime, timezone, timedelta
 import base64
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
-
-# Import from encryption module
 from autozoneura.autozoneura.background_tasks.encryption import encrypt_dynamic_json
 
 # Define the East Africa Time (EAT) timezone, which is UTC+3

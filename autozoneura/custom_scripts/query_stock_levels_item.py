@@ -1,327 +1,246 @@
 import frappe
 import json
+import base64
 import requests
 from frappe import _
 from datetime import datetime, timezone, timedelta
-
-# Import encryption function from your module
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import unpad
 from autozoneura.autozoneura.background_tasks.encryption import encrypt_dynamic_json
 
 # East Africa Time
 eat_timezone = timezone(timedelta(hours=3))
 
+def decrypt_aes_content(encrypted_content, aes_key_hex):
+    """
+    Decrypt AES encrypted content from EFRIS response
+    """
+    try:
+        # Convert hex key to bytes
+        aes_key = bytes.fromhex(aes_key_hex)
+        
+        # Base64 decode the encrypted content
+        encrypted_data = base64.b64decode(encrypted_content)
+        
+        # AES ECB mode decryption (EFRIS uses ECB mode)
+        cipher = AES.new(aes_key, AES.MODE_ECB)
+        decrypted_data = cipher.decrypt(encrypted_data)
+        
+        # Remove padding
+        decrypted_data = unpad(decrypted_data, AES.block_size)
+        
+        # Convert to string and parse JSON
+        decrypted_json = decrypted_data.decode('utf-8')
+        return json.loads(decrypted_json)
+        
+    except Exception as e:
+        print(f"Decryption error: {str(e)}")
+        raise
+
 @frappe.whitelist()
 def get_efris_stock(item_code):
     """
-    Query EFRIS goods/services using T127 interface code with encryption
+    Query EFRIS goods/services using T128 interface code with encryption
     Interface: Goods/Services Inquiry
     """
     try:
-        # Get item details
-        item = frappe.get_doc("Item", item_code)
-        
         # Get EFRIS settings
         efris_settings = get_efris_settings()
         
-        # Prepare T127 request payload for goods inquiry
-        payload = prepare_t127_payload(item, efris_settings)
+        # Get AES key from EFRIS Settings
+        aes_key = efris_settings.get("aes_key")
+        if not aes_key:
+            frappe.throw(_("AES key not found. Please refresh EFRIS key."))
+        
+        # Prepare T128 request payload for goods inquiry
+        payload = {
+            "goodsCode": item_code,
+            "pageNo": "1",
+            "pageSize": ""
+        }
         
         # Encrypt the payload
-        encrypted_result = encrypt_payload(payload)
+        encrypted_result = encrypt_dynamic_json(payload)
+        if not encrypted_result.get("success"):
+            frappe.throw(_("Encryption failed: {0}").format(encrypted_result.get("error")))
         
         # Build final request with encrypted content
-        final_request = build_final_request(encrypted_result, efris_settings)
+        current_time = datetime.now(eat_timezone).strftime("%Y-%m-%d %H:%M:%S")
+        final_request = {
+            "data": {
+                "content": encrypted_result["encrypted_content"],
+                "signature": encrypted_result["signature"],
+                "dataDescription": {
+                    "codeType": "0",
+                    "encryptCode": "1",
+                    "zipCode": "0",
+                },
+            },
+            "globalInfo": {
+                "appId": "AP04",
+                "version": "1.1.20191201",
+                "dataExchangeId": frappe.generate_hash(length=18),
+                "interfaceCode": "T127",
+                "requestCode": "TP",
+                "requestTime": current_time,
+                "responseCode": "TA",
+                "userName": "admin",
+                "deviceMAC": "B47720524158",
+                "deviceNo": efris_settings["device_no"],
+                "tin": efris_settings["tin"],
+                "brn": efris_settings["brn"],
+                "taxpayerID": "999000002030357",
+                "longitude": "32.61665",
+                "latitude": "0.36601",
+                "agentType": "0",
+                "extendField": {
+                    "responseDateFormat": "dd/MM/yyyy",
+                    "responseTimeFormat": "dd/MM/yyyy HH:mm:ss",
+                    "referenceNo": frappe.generate_hash(length=14),
+                    "operatorName": frappe.session.user,
+                },
+            },
+            "returnStateInfo": {
+                "returnCode": "",
+                "returnMessage": ""
+            }
+        }
         
         # Make request to EFRIS API
-        response = send_efris_request(final_request, efris_settings, item_code)
+        headers = {"Content-Type": "application/json"}
+        response = requests.post(
+            efris_settings['url'], 
+            json=final_request, 
+            headers=headers, 
+            timeout=60
+        )
+        response_data = response.json() if response.text else {}
         
-        # Process and return response
-        return process_efris_response(response, item_code)
+        print("\n>>> EFRIS Response:")
+        print(json.dumps(response_data, indent=2))
+        
+        # Process response
+        return_state = response_data.get("returnStateInfo", {})
+        return_code = return_state.get("returnCode", "")
+        return_message = return_state.get("returnMessage", "")
+        
+        if return_code == "00" or return_message == "SUCCESS":
+            data = response_data.get("data", {})
+            encrypted_content = data.get("content", "")
+            
+            # Decrypt the content using AES key
+            try:
+                content_data = decrypt_aes_content(encrypted_content, aes_key)
+                print("\n>>> Decrypted Content:")
+                print(json.dumps(content_data, indent=2))
+            except Exception as decrypt_error:
+                print(f"Decryption failed: {str(decrypt_error)}")
+                content_data = {"error": "Decryption failed", "details": str(decrypt_error)}
+            
+            # Log the request
+            log_integration_request(
+                'Completed',
+                efris_settings['url'],
+                headers,
+                final_request,
+                response_data,
+                item_code,
+                content_data
+            )
+            
+            return {
+                "success": True,
+                "item_code": item_code,
+                "message": return_message,
+                "data": content_data
+            }
+        else:
+            # Log failed request
+            log_integration_request(
+                'Failed',
+                efris_settings['url'],
+                headers,
+                final_request,
+                response_data,
+                item_code
+            )
+            
+            return {
+                "success": False,
+                "item_code": item_code,
+                "message": return_message,
+                "return_code": return_code
+            }
         
     except Exception as e:
-        frappe.log_error(f"EFRIS T127 Error: {str(e)}", "EFRIS Goods Inquiry")
-        frappe.throw(_("Failed to query EFRIS goods/services: {0}").format(str(e)))
+        print(f"Error: {str(e)}")
+        frappe.log_error(f"EFRIS T128 Error: {str(e)}", "EFRIS Goods Inquiry")
+        return {
+            "success": False,
+            "item_code": item_code,
+            "message": str(e),
+            "return_code": "ERROR"
+        }
 
 
 def get_efris_settings():
-    """
-    Fetch EFRIS configuration settings
-    """
+    """Fetch EFRIS configuration settings"""
     efris_settings = frappe.get_single("EFRIS Settings")
     
     if not efris_settings.is_active:
         frappe.throw(_("EFRIS integration is disabled"))
     
-    # Validate required fields
     if not efris_settings.device_number or not efris_settings.tin or not efris_settings.server_url:
-        frappe.throw(_("EFRIS Settings are incomplete. Please configure Device Number, TIN, and Server URL."))
+        frappe.throw(_("EFRIS Settings are incomplete"))
     
     return {
         "url": efris_settings.server_url,
         "tin": efris_settings.tin,
         "device_no": efris_settings.device_number,
-        "legal_name": efris_settings.legal_name,
-        "business_name": efris_settings.business_name,
-        "company": efris_settings.company,
-        "branch_id": efris_settings.branch_id or "",
         "brn": efris_settings.brn or "",
+        "aes_key": efris_settings.aes_key or ""
     }
 
 
-def prepare_t127_payload(item, settings):
-    """
-    Prepare T127 interface request payload for Goods/Services Inquiry
-    According to URA EFRIS documentation
-    
-    Interface: T127 - Goods/Services Inquiry
-    Request/Response: Encrypted
-    """
-    
-    # Get current date for date range
-    current_date = datetime.now(eat_timezone).strftime("%Y-%m-%d")
-    
-    # T127 - Goods/Services Inquiry Request Structure
-    payload = {
-        "id":"501218921377060062",
-        "branchId":"431354597574840075"
-    }
-
-    return payload
-
-
-def encrypt_payload(payload):
-    """
-    Encrypt and sign the payload using the encryption module
-    """
-    encrypted_result = encrypt_dynamic_json(payload)
-    
-    if not encrypted_result.get("success"):
-        frappe.throw(_("Encryption failed: {0}").format(encrypted_result.get("error")))
-    
-    return encrypted_result
-
-
-def build_final_request(encrypted_result, settings):
-    """
-    Build the final request with encrypted content and global info
-    """
-    current_time = datetime.now(eat_timezone).strftime("%Y-%m-%d %H:%M:%S")
-    
-    final_request = {
-        "data": {
-            "content": encrypted_result["encrypted_content"],
-            "signature": encrypted_result["signature"],
-            "dataDescription": {
-                "codeType": "0",
-                "encryptCode": "1",  # 1 = Encrypted
-                "zipCode": "0",
-            },
-        },
-        "globalInfo": {
-            "appId": "AP04",
-            "version": "1.1.20191201",
-            "dataExchangeId": frappe.generate_hash(length=18),
-            "interfaceCode": "T128",  # Interface code for Goods/Services Inquiry
-            "requestCode": "TP",
-            "requestTime": current_time,
-            "responseCode": "TA",
-            "userName": "admin",
-            "deviceMAC": "B47720524158",
-            "deviceNo": settings["device_no"],
-            "tin": settings["tin"],
-            "brn": settings["brn"],
-            "taxpayerID": "999000002030357",
-            "longitude": "32.61665",
-            "latitude": "0.36601",
-            "agentType": "0",
-            "extendField": {
-                "responseDateFormat": "dd/MM/yyyy",
-                "responseTimeFormat": "dd/MM/yyyy HH:mm:ss",
-                "referenceNo": frappe.generate_hash(length=14),
-                "operatorName": frappe.session.user,
-            },
-        },
-        "returnStateInfo": {
-            "returnCode": "",
-            "returnMessage": ""
+def log_integration_request(status, url, headers, data, response, item_code, decrypted_data=None):
+    """Log integration request to Integration Request doctype"""
+    try:
+        output = {
+            "encrypted_response": response,
+            "decrypted_data": decrypted_data if decrypted_data else {}
         }
-    }
-    
-    return final_request
-
-
-def send_efris_request(final_request, settings, item_code):
-    """
-    Send encrypted request to EFRIS API endpoint
-    """
-    headers = {
-        "Content-Type": "application/json"
-    }
-    
-    url = settings['url']
-    
-    def log_integration_request(status, url, headers, data, response, error=""):
-        """Log integration request to Integration Request doctype - RAW payloads only"""
-        valid_statuses = ["", "Queued", "Authorized", "Completed", "Cancelled", "Failed"]
-        status = status if status in valid_statuses else "Failed"
         
         integration_request = frappe.get_doc({
             "doctype": "Integration Request",
             "integration_type": "Remote",
-            "integration_request_service": "Goods/Services Inquiry T127",
+            "integration_request_service": "Goods Inquiry T128",
             "is_remote_request": True,
             "method": "POST",
             "status": status,
             "url": url,
             "request_headers": json.dumps(headers, indent=4),
             "data": json.dumps(data, indent=4),
-            "output": json.dumps(response, indent=4),
-            "error": error,
+            "output": json.dumps(output, indent=4),
             "reference_doctype": "Item",
             "reference_docname": item_code,
-            "execution_time": datetime.now(eat_timezone).strftime("%Y-%m-%d %H:%M:%S")
         })
         integration_request.insert(ignore_permissions=True)
         frappe.db.commit()
-    
-    try:
-        response = requests.post(url, json=final_request, headers=headers, timeout=60)
-        response_data = response.json() if response.text else {}
-        
-        return_message = response_data.get("returnStateInfo", {}).get("returnMessage", "")
-        
-        # Log Raw Request and Response
-        log_integration_request(
-            'Completed' if response.status_code == 200 else 'Failed',
-            url,
-            headers,
-            final_request,
-            response_data,
-            f"HTTP {response.status_code}: {return_message}"
-        )
-        
-        return response_data
-        
-    except requests.exceptions.Timeout:
-        error_msg = "Request timed out after 60s"
-        log_integration_request('Failed', url, headers, final_request, {}, error_msg)
-        frappe.throw(error_msg)
-    except requests.exceptions.RequestException as e:
-        error_msg = f"API Error: {str(e)}"
-        log_integration_request('Failed', url, headers, final_request, {}, error_msg)
-        frappe.throw(error_msg)
-    except Exception as e:
-        error_msg = f"Unexpected error: {str(e)}"
-        log_integration_request('Failed', url, headers, final_request, {}, error_msg)
-        frappe.throw(error_msg)
+    except:
+        pass
 
-
-def process_efris_response(response, item_code):
-    """
-    Process EFRIS API response
-    Response is encrypted and needs to be decrypted
-    """
-    if not response:
-        frappe.throw(_("Empty response from EFRIS"))
-    
-    return_state = response.get("returnStateInfo", {})
-    return_code = return_state.get("returnCode", "")
-    return_message = return_state.get("returnMessage", "")
-    
-    if return_code == "00" or return_message == "SUCCESS":
-        # Success - response content is encrypted
-        data = response.get("data", {})
-        encrypted_content = data.get("content", "")
-        signature = data.get("signature", "")
-        
-        
-        # TODO: Add decryption using your decrypt function
-        
-        try:
-            
-            content_data = json.loads(encrypted_content) if isinstance(encrypted_content, str) else encrypted_content
-        except:
-            content_data = encrypted_content
-        
-        return {
-            "success": True,
-            "item_code": item_code,
-            "message": return_message,
-            "return_code": return_code,
-            "data": content_data,
-            "encrypted_content": encrypted_content,
-            "signature": signature,
-            "response": response
-        }
-    else:
-        # Error or non-success response
-        return {
-            "success": False,
-            "item_code": item_code,
-            "message": return_message,
-            "return_code": return_code,
-            "response": response
-        }
-
-
-@frappe.whitelist()
-def search_efris_goods(search_term="", page_no=1, page_size=10):
-    """
-    Search for goods/services in EFRIS
-    """
-    try:
-        efris_settings = get_efris_settings()
-        current_date = datetime.now(eat_timezone).strftime("%Y-%m-%d")
-        
-        # Build search payload
-        payload = {
-            "goodsCode": "",
-            "goodsName": search_term,
-            "commodityCategoryName": "",
-            "pageNo": str(page_no),
-            "pageSize": str(page_size),
-            "branchId": efris_settings["branch_id"],
-            "serviceMark": "101",  # 101: Goods
-            "haveExciseTax": "101",
-            "startDate": current_date,
-            "endDate": current_date,
-            "combineKeywords": search_term,
-            "goodsTypeCode": "101",
-            "tin": efris_settings["tin"],
-            "queryType": "1"
-        }
-        
-        # Encrypt
-        encrypted_result = encrypt_payload(payload)
-        
-        # Build request
-        final_request = build_final_request(encrypted_result, efris_settings)
-        
-        # Send request
-        headers = {"Content-Type": "application/json"}
-        response = requests.post(efris_settings['url'], json=final_request, headers=headers, timeout=60)
-        response_data = response.json() if response.text else {}
-        
-        return process_efris_response(response_data, search_term)
-        
-    except Exception as e:
-        frappe.log_error(f"EFRIS Search Error: {str(e)}", "EFRIS Goods Search")
-        frappe.throw(str(e))
 
 @frappe.whitelist()
 def sync_item_to_efris(item_code):
-    """
-    Query item goods/services info from EFRIS system
-    """
+    """Query item goods/services info from EFRIS system"""
     try:
         result = get_efris_stock(item_code)
         
         if result.get("success"):
-            frappe.msgprint(_("Goods/Services queried successfully from EFRIS for {0}").format(item_code))
+            frappe.msgprint(_("Item queried successfully from EFRIS"))
         else:
             frappe.msgprint(
-                _("EFRIS Response: {0}. Full details logged in Integration Request.").format(result.get("message")),
-                title=_("EFRIS API Response"),
+                _("EFRIS Response: {0}").format(result.get("message")),
                 indicator="orange"
             )
         

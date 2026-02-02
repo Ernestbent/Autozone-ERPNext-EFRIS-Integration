@@ -49,6 +49,9 @@ doctype_js = {
         "public/js/efris_stock_button.js"
     ],
     "Customer": "public/js/get_tax_payer_information.js",
+    "Sales Invoice":[
+        "public/js/query_individual_stocks.js",
+    ]
     
 }
 
@@ -165,9 +168,11 @@ doc_events = {
 # ---------------
 
 scheduler_events = {
-	"daily": [
-		"autozoneura.autozoneura.background_tasks.efris_key_manager.test_efris_complete_flow"
-	],
+	"cron": {
+        "0 1 * * *": [ 
+            "autozoneura.autozoneura.background_tasks.efris_key_manager.test_efris_complete_flow"
+        ]
+    }
 }
 
 # Testing

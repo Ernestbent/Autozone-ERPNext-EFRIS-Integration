@@ -1,7 +1,7 @@
-frappe.ui.form.on('Item', {
+frappe.ui.form.on('Sales Invoice', {
     refresh: function(frm) {
         // Only show button if item has item_code (new items won't have it yet)
-        if (!frm.doc.item_code) return;
+       
         
         frm.add_custom_button(__('EFRIS Stock'), function() {
             frappe.call({
