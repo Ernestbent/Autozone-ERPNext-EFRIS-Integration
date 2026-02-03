@@ -647,6 +647,9 @@ def on_send(doc, event):
         frappe.log_error(
             title="EFRIS Submission Error",
             message=error_msg,
-            docstatus = 0
+            docstatus = 0 
         )
         frappe.throw(error_msg)
+
+#################################
+#Process Credit Notes using T110 interface code
