@@ -8,7 +8,25 @@ from autozoneura.autozoneura.background_tasks.decryption import decrypt_string
 
 eat_timezone = timezone(timedelta(hours=3))
 
-def log_integration_request(status, url, headers, data, response, error="", reference_doctype="", reference_docname=""):
+## SHARED UTILITIES - KEEP LOGGING, NO REFERENCE FIELDS
+
+def get_efris_settings():
+    """Extract and validate EFRIS settings."""
+    efris_settings = frappe.get_single("EFRIS Settings")
+    
+    required = {
+        "Device Number": efris_settings.device_number,
+        "TIN": efris_settings.tin,
+        "Server URL": efris_settings.server_url
+    }
+    missing = [k for k, v in required.items() if not v]
+    if missing:
+        frappe.throw(f"EFRIS Settings incomplete: {', '.join(missing)}")
+    
+    return efris_settings
+
+def log_integration_request(status, url, headers, data, response, error=""):
+    """Log integration requests - NO reference_doctype/docname."""
     valid_statuses = ["", "Queued", "Authorized", "Completed", "Cancelled", "Failed"]
     status = status if status in valid_statuses else "Failed"
     
@@ -25,48 +43,29 @@ def log_integration_request(status, url, headers, data, response, error="", refe
             "data": json.dumps(data, indent=4),
             "output": json.dumps(response, indent=4),
             "error": error,
-            "reference_doctype": reference_doctype,
-            "reference_docname": reference_docname,
             "execution_time": datetime.now(eat_timezone).strftime("%Y-%m-%d %H:%M:%S EAT")
+            # NO reference_doctype or reference_docname
         })
         integration_request.insert(ignore_permissions=True)
         frappe.db.commit()
     except Exception:
         pass
 
-@frappe.whitelist()
-def query_tax_payer(tax_id, customer_name=""):
-    """TIN Validation - EFRIS T119 API with DECRYPTION & FIELD POPULATION"""
-    
-    if not tax_id or len(tax_id.strip()) < 10:
-        frappe.throw("Please enter a valid TIN (minimum 10 characters)")
-    
-    # SINGLE EFRIS Settings
-    efris_settings = frappe.get_single("EFRIS Settings")
-    
-    # Validate settings
-    required = {
-        "Device Number": efris_settings.device_number,
-        "TIN": efris_settings.tin,
-        "Server URL": efris_settings.server_url
-    }
-    missing = [k for k, v in required.items() if not v]
-    if missing:
-        frappe.throw(f"EFRIS Settings incomplete: {', '.join(missing)}")
-    
-    # TIN Query Payload
-    json_data = {"ninBrn": "", "tin": tax_id.strip()}
-    encrypted_result = encrypt_dynamic_json(json_data)
+def build_tin_payload(tax_id):
+    """Build T119 TIN query payload."""
+    return {"ninBrn": "", "tin": tax_id.strip()}
+
+def build_t119_request(payload, efris_settings):
+    """Build complete T119 request structure."""
+    encrypted_result = encrypt_dynamic_json(payload)
     if not encrypted_result.get("success"):
         frappe.throw(f"Encryption failed: {encrypted_result.get('error')}")
     
-    # Dynamic headers
     request_time = datetime.now(eat_timezone).strftime("%Y-%m-%d %H:%M:%S")
     data_exchange_id = frappe.generate_hash(length=18)
     reference_no = frappe.generate_hash(length=14)
     
-    # EFRIS T119 Complete Payload (same structure as Stock Entry)
-    data_to_post = {
+    return {
         "data": {
             "content": encrypted_result["encrypted_content"],
             "signature": encrypted_result["signature"],
@@ -102,70 +101,87 @@ def query_tax_payer(tax_id, customer_name=""):
         },
         "returnStateInfo": {"returnCode": "", "returnMessage": ""},
     }
+
+def send_efris_request(server_url, data_to_post, headers):
+    """Send request with timeout."""
+    try:
+        response = requests.post(server_url, json=data_to_post, headers=headers, timeout=30)
+        return response.json() if response.text else {}, response.status_code
+    except requests.exceptions.Timeout:
+        raise Exception("Request timed out after 30s")
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"API Error: {str(e)}")
+
+def process_tin_response(response_data, server_url, headers, data_to_post, status_code):
+    """Process and decrypt successful T119 response."""
+    return_message = response_data.get("returnStateInfo", {}).get("returnMessage", "")
     
+    # Log raw response - NO reference fields
+    log_integration_request(
+        'Completed' if status_code == 200 else 'Failed',
+        server_url, headers, data_to_post, response_data,
+        f"HTTP {status_code}: {return_message}"
+    )
+    
+    if status_code != 200 or return_message != "SUCCESS":
+        frappe.throw(f"EFRIS Response: {return_message}. Check Integration Request log.", 
+                    title="EFRIS API Response")
+    
+    # Decrypt response content
+    content = response_data.get("data", {}).get("content")
+    if not content:
+        frappe.throw("No encrypted content in URA response")
+    
+    decrypted_string = decrypt_string(content)
+    decoded_data = json.loads(decrypted_string)
+    taxpayer = decoded_data.get("taxpayer", {})
+    
+    return {
+        "success": True,
+        "business_name": taxpayer.get("legalName", ""),
+        "nin_brn": taxpayer.get("ninBrn", ""),
+        "taxpayer_type": taxpayer.get("taxpayerType", ""),
+        "contact_email": taxpayer.get("contactEmail", ""),
+        "contact_number": taxpayer.get("contactNumber", ""),
+        "address": taxpayer.get("address", ""),
+        "government_tin": taxpayer.get("governmentTIN", taxpayer.get("tin", "")),
+        "tax_id": decoded_data.get("tin", ""),
+        "legal_name": taxpayer.get("legalName", "")
+    }
+
+## MAIN API ENDPOINT
+
+@frappe.whitelist()
+def query_tax_payer(tax_id, customer_name=""):
+    """TIN Validation - EFRIS T119 API with decryption & field population."""
+    
+    # Validate input
+    if not tax_id or len(tax_id.strip()) < 10:
+        frappe.throw("Please enter a valid TIN (minimum 10 characters)")
+    
+    # Get validated settings
+    efris_settings = get_efris_settings()
+    
+    # Build and send request
     headers = {"Content-Type": "application/json"}
+    payload = build_tin_payload(tax_id)
+    data_to_post = build_t119_request(payload, efris_settings)
     
     try:
-        # Send request (same as Stock Entry)
-        response = requests.post(efris_settings.server_url, json=data_to_post, headers=headers, timeout=30)
-        response_data = response.json() if response.text else {}
+        response_data, status_code = send_efris_request(efris_settings.server_url, data_to_post, headers)
         
-        return_message = response_data.get("returnStateInfo", {}).get("returnMessage", "")
-        
-        # LOG RAW Response (like Stock Entry)
-        log_integration_request(
-            'Completed' if response.status_code == 200 else 'Failed',
-            efris_settings.server_url, headers, data_to_post, response_data,
-            f"HTTP {response.status_code}: {return_message}",
-            "Customer", customer_name or tax_id
+        # Process successful response - NO reference fields
+        result = process_tin_response(
+            response_data, efris_settings.server_url, headers, data_to_post, status_code
         )
         
-        # DECRYPT RESPONSE CONTENT (like you want)
-        if response.status_code == 200 and return_message == "SUCCESS":
-            content = response_data.get("data", {}).get("content")
-            if content:
-                # DECRYPT using your decrypt_string function
-                decrypted_string = decrypt_string(content)
-                decoded_data = json.loads(decrypted_string)
-                taxpayer = decoded_data.get("taxpayer", {})
-                
-                # POPULATE CUSTOMER FIELDS (like Stock Entry stores custom fields)
-                result = {
-                    "success": True,
-                    "business_name": taxpayer.get("legalName", ""),
-                    "nin_brn": taxpayer.get("ninBrn", ""),
-                    "taxpayer_type": taxpayer.get("taxpayerType", ""),
-                    "contact_email": taxpayer.get("contactEmail", ""),
-                    "contact_number": taxpayer.get("contactNumber", ""),
-                    "address": taxpayer.get("address", ""),
-                    "government_tin": taxpayer.get("governmentTIN", taxpayer.get("tin", "")),
-                    "tax_id": tax_id,
-                    "legal_name": taxpayer.get("legalName", "")
-                }
-                
-                # # Store raw response in custom fields (like Stock Entry)
-                # frappe.db.set_value("Customer", customer_name, {
-                #     "custom_post_request": json.dumps(data_to_post, indent=4),
-                #     "custom_response": json.dumps(response_data, indent=4),
-                #     "custom_return_status": return_message
-                # })
-                
-                return result
-            else:
-                frappe.throw("No encrypted content in URA response")
-        else:
-            frappe.throw(f"EFRIS Response: {return_message}. Check Integration Request log.", 
-                        title="EFRIS API Response")
+        return result
         
-    except requests.exceptions.Timeout:
-        error_msg = "Request timed out after 30s"
-        log_integration_request('Failed', efris_settings.server_url, headers, data_to_post, {}, error_msg)
-        frappe.throw(error_msg)
-    except requests.exceptions.RequestException as e:
-        error_msg = f"API Error: {str(e)}"
-        log_integration_request('Failed', efris_settings.server_url, headers, data_to_post, {}, error_msg)
-        frappe.throw(error_msg)
     except Exception as e:
-        error_msg = f"Unexpected error: {str(e)}"
-        log_integration_request('Failed', efris_settings.server_url, headers, data_to_post, {}, error_msg)
+        # Log errors - NO reference fields
+        error_msg = str(e)
+        log_integration_request(
+            'Failed', efris_settings.server_url, headers, data_to_post, {},
+            error_msg
+        )
         frappe.throw(error_msg)

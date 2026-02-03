@@ -2,56 +2,67 @@ import frappe
 import requests
 import json
 from datetime import datetime, timezone, timedelta
-import base64
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 from autozoneura.autozoneura.background_tasks.encryption import encrypt_dynamic_json
 
-# Define the East Africa Time (EAT) timezone, which is UTC+3
 eat_timezone = timezone(timedelta(hours=3))
 
-def log_integration_request(status, url, headers, data, response, error=""):
-    valid_statuses = ["", "Queued", "Authorized", "Completed", "Cancelled", "Failed"]
-    status = status if status in valid_statuses else "Failed"
+## Get Shared Utilities
 
-    integration_request = frappe.get_doc({
-        "doctype": "Integration Request",
-        "integration_type": "Remote",
-        "method": "POST",
-        "integration_request_service": "Goods Upload",
-        "is_remote_request": True,
-        "status": status,
-        "url": url,
-        "request_headers": json.dumps(headers),
-        "data": json.dumps(data),
-        "output": json.dumps(response),
-        "error": error,
-        "execution_time": datetime.now(eat_timezone).strftime("%Y-%m-%d %H:%M:%S")
-    })
-    integration_request.insert(ignore_permissions=True)
-    frappe.db.commit()
-
-@frappe.whitelist()
-def on_save(doc, event):
-
-    if not doc.custom_efris_item:
-        return
-
-    # Load Single Doctype
+def get_efris_settings():
+    """Fetch and validate EFRIS configuration."""
     efris_settings = frappe.get_single("EFRIS Settings")
-
+    
     if not efris_settings.is_active:
         frappe.throw("EFRIS integration is disabled")
+    
+    if not efris_settings.device_number or not efris_settings.tin or not efris_settings.server_url:
+        frappe.throw("EFRIS Settings are incomplete")
+    
+    if not efris_settings.aes_key:
+        frappe.throw("AES key not found in EFRIS Settings")
+    
+    return {
+        "server_url": efris_settings.server_url,
+        "device_number": efris_settings.device_number,
+        "tin": efris_settings.tin,
+        "brn": efris_settings.brn or "",
+        "aes_key": efris_settings.aes_key
+    }
 
-    server_url = efris_settings.server_url
-    device_number = efris_settings.device_number
-    tin = efris_settings.tin
+def log_integration_request(status, url, headers, data, response, error=""):
+    """Log to Integration Request - NO reference fields."""
+    valid_statuses = ["", "Queued", "Authorized", "Completed", "Cancelled", "Failed"]
+    status = status if status in valid_statuses else "Failed"
+    
+    try:
+        integration_request = frappe.get_doc({
+            "doctype": "Integration Request",
+            "integration_type": "Remote",
+            "method": "POST",
+            "integration_request_service": "Goods Upload T130",
+            "is_remote_request": True,
+            "status": status,
+            "url": url,
+            "request_headers": json.dumps(headers, indent=4),
+            "data": json.dumps(data, indent=4),
+            "output": json.dumps(response, indent=4),
+            "error": error,
+            "execution_time": datetime.now(eat_timezone).strftime("%Y-%m-%d %H:%M:%S EAT")
+            # NO reference_doctype or reference_docname
+        })
+        integration_request.insert(ignore_permissions=True)
+        frappe.db.commit()
+    except Exception:
+        pass
 
-    operation_type = doc.custom_registermodify_item
+## Prepare Interface Code Payload data T130
 
-    # Build goods data
-    goods_data = [{
-        "operationType": operation_type,
+def build_t130_goods_payload(doc):
+    """Build T130 goods upload payload."""
+    return [{
+        "operationType": doc.custom_registermodify_item,
         "goodsName": doc.item_name,
         "goodsCode": doc.item_code,
         "measureUnit": doc.custom_uom_code_efris,
@@ -68,39 +79,18 @@ def on_save(doc, event):
         "haveOtherUnit": "102",
         "goodsTypeCode": "101",
         "haveCustomsUnit": "102",
-        # "commodityGoodsExtendEntity": {
-        #     "customsMeasureUnit": "",
-        #     "customsUnitPrice":"",
-        #     "packageScaledValueCustoms":"",
-        #     "customsScaledValue":""
-        # },
         "goodsOtherUnits": [],
     }]
 
-    # Encrypt the payload
+def build_t130_request(goods_data, settings):
+    """Build complete T130 EFRIS request."""
     encrypted_result = encrypt_dynamic_json(goods_data)
-
     if not encrypted_result.get("success"):
         frappe.throw(encrypted_result.get("error"))
-
-    # Decrypt the encryted content locally
-    try:
-        aes_key_hex = efris_settings.aes_key
-        if not aes_key_hex:
-            frappe.throw("AES key not found in EFRIS Settings")
-
-        aes_key_bytes = bytes.fromhex(aes_key_hex)
-        encrypted_bytes = base64.b64decode(encrypted_result["encrypted_content"])
-        cipher = AES.new(aes_key_bytes, AES.MODE_ECB)
-        decrypted_bytes = unpad(cipher.decrypt(encrypted_bytes), AES.block_size)
-        decrypted_json = json.loads(decrypted_bytes.decode("utf-8"))
-
-    except Exception as e:
-        print("Failed to decrypt encrypted content locally:", str(e))
-
-    # Build final payload
+    
     current_time = datetime.now(eat_timezone).strftime("%Y-%m-%d %H:%M:%S")
-    payload = {
+    
+    return {
         "data": {
             "content": encrypted_result["encrypted_content"],
             "signature": encrypted_result["signature"],
@@ -120,9 +110,9 @@ def on_save(doc, event):
             "responseCode": "TA",
             "userName": "admin",
             "deviceMAC": "B47720524158",
-            "deviceNo": device_number,
-            "tin": tin,
-            "brn": efris_settings.brn or "",
+            "deviceNo": settings["device_number"],
+            "tin": settings["tin"],
+            "brn": settings["brn"],
             "taxpayerID": "1",
             "longitude": "32.61665",
             "latitude": "0.36601",
@@ -134,21 +124,50 @@ def on_save(doc, event):
         "returnStateInfo": {}
     }
 
+def send_efris_t130_request(server_url, request_data):
+    """Send T130 request with timeout."""
     headers = {"Content-Type": "application/json"}
+    response = requests.post(server_url, json=request_data, headers=headers, timeout=60)
+    response.raise_for_status()
+    return response.json()
 
+## Main Event Handler
+@frappe.whitelist()
+def on_save(doc, event):
+    """Handle Item save event for EFRIS T130 goods upload."""
     try:
-        response = requests.post(server_url, json=payload, headers=headers, timeout=60)
-        response.raise_for_status()
-        response_data = response.json()
-
-        if response_data.get("returnStateInfo", {}).get("returnMessage") == "SUCCESS":
+        # Skip if not EFRIS item
+        if not doc.custom_efris_item:
+            return
+        
+        # Get validated settings
+        settings = get_efris_settings()
+        
+        # Build and send T130 request
+        goods_data = build_t130_goods_payload(doc)
+        request_data = build_t130_request(goods_data, settings)
+        
+        # Send request
+        response_data = send_efris_t130_request(settings["server_url"], request_data)
+        
+        # Process response
+        return_state = response_data.get("returnStateInfo", {})
+        return_message = return_state.get("returnMessage", "")
+        
+        # Log request
+        if return_message == "SUCCESS":
+            log_integration_request("Completed", settings["server_url"], {}, request_data, response_data)
             frappe.msgprint("Item successfully synced with EFRIS")
-            log_integration_request("Completed", server_url, headers, payload, response_data)
         else:
-            msg = response_data["returnStateInfo"].get("returnMessage", "Unknown error")
-            log_integration_request("Failed", server_url, headers, payload, response_data, msg)
+            msg = return_message or "Unknown error"
+            log_integration_request("Failed", settings["server_url"], {}, request_data, response_data, msg)
             frappe.throw(msg)
-
+            
+    except requests.exceptions.RequestException as e:
+        error_msg = str(e)
+        log_integration_request("Failed", settings["server_url"], {}, request_data if 'request_data' in locals() else {}, {}, error_msg)
+        frappe.throw(error_msg)
     except Exception as e:
-        log_integration_request("Failed", server_url, headers, payload, {}, str(e))
-        frappe.throw(str(e))
+        error_msg = str(e)
+        log_integration_request("Failed", settings["server_url"] if 'settings' in locals() else "", {}, {}, {}, error_msg)
+        frappe.throw(error_msg)

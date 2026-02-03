@@ -1,175 +1,179 @@
+import json
 import base64
+import uuid
 from datetime import datetime, timezone, timedelta
+
 import frappe
 import requests
-import json
-import uuid
 
 from autozoneura.autozoneura.background_tasks.encryption import encrypt_dynamic_json
 
-eat_timezone = timezone(timedelta(hours=3))  # UTC+3
-current_time = datetime.now(eat_timezone).strftime("%Y-%m-%d %H:%M:%S")
+## East Africa Time (UTC+3)
+EAT = timezone(timedelta(hours=3))
 
+## Valid statuses for logging
+VALID_STATUSES = ["", "Queued", "Authorized", "Completed", "Cancelled", "Failed"]
 
-def stock_adjust(doc, event):
-    date_str = doc.posting_date
-    time_str = doc.posting_time
-    datetime_combined = f"{date_str} {time_str}"
+## Mapping for adjustment types
+ADJUSTMENT_TYPE_MAPPING = {
+    "Expired Goods": "101",
+    "Damaged Goods": "102",
+    "Personal Uses": "103",
+    "Raw Materials": "105",
+}
 
-    # Load Single Doctype # Load Single Doctype
-    efris_settings = frappe.get_single("EFRIS Settings")
-    
-    # Check if EFRIS integration is active
-    if not efris_settings.is_active:
+## Log integration requests to Integration Request doctype
+def log_integration_request(status, url, headers, request_data, response_data, error=""):
+    status = status if status in VALID_STATUSES else "Failed"
+    frappe.get_doc({
+        "doctype": "Integration Request",
+        "integration_type": "Remote",
+        "integration_request_service": "Stock Adjustment",
+        "is_remote_request": 1,
+        "method": "POST",
+        "status": status,
+        "url": url,
+        "request_headers": json.dumps(headers, indent=2),
+        "data": json.dumps(request_data, indent=2),
+        "output": json.dumps(response_data, indent=2),
+        "error": error,
+        "execution_time": datetime.now(EAT).strftime("%Y-%m-%d %H:%M:%S"),
+    }).insert(ignore_permissions=True)
+    frappe.db.commit()
+
+## Fetch EFRIS Settings
+def get_efris_settings():
+    settings = frappe.get_single("EFRIS Settings")
+    if not settings.is_active:
         frappe.throw("EFRIS integration is disabled")
+    if not settings.tin or not settings.brn:
+        frappe.throw("TIN and BRN are required in EFRIS Settings")
+    settings.brn = settings.brn.strip().lstrip("/")
+    return settings
 
-    # Get settings with proper field names
-    device_number = efris_settings.device_number
-    tin = efris_settings.tin
-    server_url = efris_settings.server_url
-    brn = efris_settings.brn 
-
-
-    adjustment_type_mapping = {
-        "Expired Goods": "101",
-        "Damaged Goods": "102",
-        "Personal Uses": "103",
-        "Raw Materials": "105",
+## Build goods stock item for payload
+def build_goods_stock_item(item):
+    return {
+        "commodityGoodsId": "",
+        "goodsCode": item.item_code,
+        "measureUnit": item.custom_uom_code,
+        "quantity": item.qty,
+        "unitPrice": item.basic_rate,
+        "remarks": "",
+        "fuelTankId": "",
+        "lossQuantity": "",
+        "originalQuantity": "",
     }
 
-    adjust_reason = doc.custom_adjustment_type
-    adjust_type_code = adjustment_type_mapping.get(adjust_reason, "")
+## Build stock adjustment payload for URA
+def build_stock_adjustment_payload(doc, item, settings):
+    adjust_type_code = ADJUSTMENT_TYPE_MAPPING.get(doc.custom_adjustment_type, "")
+    if not adjust_type_code:
+        frappe.throw("Invalid stock adjustment type")
+    return {
+        "goodsStockIn": {
+            "operationType": "102",
+            "supplierTin": "",
+            "supplierName": "",
+            "adjustType": adjust_type_code,
+            "remarks": "",
+            "stockInDate": doc.posting_date,
+            "stockInType": "",
+            "productionBatchNo": "",
+            "productionDate": "",
+            "branchId": "",
+            "invoiceNo": "",
+            "isCheckBatchNo": "0",
+            "rollBackIfError": "0",
+            "goodsTypeCode": "101",
+        },
+        "goodsStockInItem": [build_goods_stock_item(item)],
+    }
+
+## Build full request payload for URA
+def build_request_payload(settings, encrypted_content, signature, reference_no):
+    return {
+        "data": {
+            "content": encrypted_content,
+            "signature": signature,
+            "dataDescription": {
+                "codeType": "0",
+                "encryptCode": "1",
+                "zipCode": "0",
+            },
+        },
+        "globalInfo": {
+            "appId": "AP04",
+            "version": "1.1.20191201",
+            "dataExchangeId": uuid.uuid4().hex[:32],
+            "interfaceCode": "T131",
+            "requestCode": "TP",
+            "requestTime": datetime.now(EAT).strftime("%Y-%m-%d %H:%M:%S"),
+            "responseCode": "TA",
+            "userName": "admin",
+            "deviceMAC": "B47720524158",
+            "deviceNo": settings.device_number,
+            "tin": settings.tin,
+            "brn": settings.brn,
+            "taxpayerID": settings.tin,
+            "longitude": "32.61665",
+            "latitude": "0.36601",
+            "agentType": "0",
+            "extendField": {
+                "referenceNo": reference_no,
+                "operatorName": "administrator",
+                "responseDateFormat": "dd/MM/yyyy",
+                "responseTimeFormat": "dd/MM/yyyy HH:mm:ss",
+            },
+        },
+        "returnStateInfo": {},
+    }
+
+## Main stock adjustment function triggered on document submission
+def stock_adjust(doc, event):
+    settings = get_efris_settings()
+    headers = {"Content-Type": "application/json"}
 
     for item in doc.items:
-        goods_stock_in = {
-            "commodityGoodsId": "",
-            "goodsCode": item.item_code,
-            "measureUnit": item.custom_uom_code,
-            "quantity": item.qty,
-            "unitPrice": item.basic_rate,
-            "remarks": "",
-            "fuelTankId": "",
-            "lossQuantity": "",
-            "originalQuantity": "",
-        }
+        stock_payload = build_stock_adjustment_payload(doc, item, settings)
+        encrypted = encrypt_dynamic_json(stock_payload)
+        if not encrypted.get("success"):
+            frappe.throw(encrypted.get("error"))
 
-        data_payload = {
-            "goodsStockIn": {
-                "operationType": "102",
-                "supplierTin": "",
-                "supplierName": "",
-                "adjustType": adjust_type_code,
-                "remarks": "",
-                "stockInDate": doc.posting_date,
-                "stockInType": "",
-                "productionBatchNo": "",
-                "productionDate": "",
-                "branchId": "",
-                "invoiceNo": "",
-                "isCheckBatchNo": "0",
-                "rollBackIfError": "0",
-                "goodsTypeCode": "101",
-            },
-            "goodsStockInItem": [goods_stock_in],
-        }
+        request_payload = build_request_payload(
+            settings=settings,
+            encrypted_content=encrypted["encrypted_content"],
+            signature=encrypted["signature"],
+            reference_no=doc.name,
+        )
 
-        # Encrypt the payload
-        encrypted_result = encrypt_dynamic_json(data_payload)
-        if not encrypted_result.get("success"):
-            frappe.throw(f"Encryption failed: {encrypted_result.get('error')}")
-
-        # Generate a 32-character UUID (UUID4 without hyphens)
-        data_exchange_id = uuid.uuid4().hex[:32]
-
-        data_to_post = {
-            "data": {
-                "content": encrypted_result["encrypted_content"],
-                "signature": encrypted_result["signature"],
-                "dataDescription": {
-                    "codeType": "0",
-                    "encryptCode": "1",
-                    "zipCode": "0",
-                },
-            },
-            "globalInfo": {
-                "appId": "AP04",
-                "version": "1.1.20191201",
-                "dataExchangeId": data_exchange_id,
-                "interfaceCode": "T131",
-                "requestCode": "TP",
-                "requestTime": datetime_combined,
-                "responseCode": "TA",
-                "userName": "admin",
-                "deviceMAC": "B47720524158",
-                "deviceNo": device_number,
-                "tin": tin,
-                "brn": brn,
-                "taxpayerID": "999000002030357",
-                "longitude": "32.61665",
-                "latitude": "0.36601",
-                "agentType": "0",
-                "extendField": {
-                    "responseDateFormat": "dd/MM/yyyy",
-                    "responseTimeFormat": "dd/MM/yyyy HH:mm:ss",
-                    "referenceNo": "",
-                    "operatorName": "administrator",
-                },
-            },
-            "returnStateInfo": {
-                "returnCode": "",
-                "returnMessage": ""
-            },
-        }
-
-        def log_integration_request(status, url, headers, data, response, error=""):
-            valid_statuses = ["", "Queued", "Authorized", "Completed", "Cancelled", "Failed"]
-            status = status if status in valid_statuses else "Failed"
-            integration_request = frappe.get_doc({
-                "doctype": "Integration Request",
-                "integration_type": "Remote",
-                "integration_request_service": "Stock Adjustment",
-                "is_remote_request": True,
-                "method": "POST",
-                "status": status,
-                "url": url,
-                "request_headers": json.dumps(headers, indent=4),
-                "data": json.dumps(data, indent=4),
-                "output": json.dumps(response, indent=4),
-                "error": error,
-                "execution_time": datetime.now()
-            })
-            integration_request.insert(ignore_permissions=True)
-            frappe.db.commit()
+        doc.custom_post_payload = json.dumps(request_payload, indent=2)
 
         try:
-            headers = {'Content-Type': 'application/json'}
-            response = requests.post(server_url, json=data_to_post, headers=headers)
+            response = requests.post(settings.server_url, json=request_payload, headers=headers, timeout=30)
             response.raise_for_status()
             response_data = response.json()
-            return_message = response_data["returnStateInfo"]["returnMessage"]
 
-            doc.custom_post_payload = json.dumps(data_to_post, indent=4)
-            doc.custom_response_payload = json.dumps(response_data, indent=4)
+            doc.custom_response_payload = json.dumps(response_data, indent=2)
+            return_message = response_data["returnStateInfo"].get("returnMessage")
             doc.custom_return_status = return_message
 
-            log_integration_request('Completed', server_url, headers, data_to_post, response_data)
-
-            if response.status_code == 200 and return_message == "SUCCESS":
-                frappe.msgprint("Stock Levels Adjusted successfully")
+            if return_message == "SUCCESS":
+                log_integration_request("Completed", settings.server_url, headers, request_payload, response_data)
+                frappe.msgprint("Stock levels adjusted successfully")
             elif return_message == "Partial failure!":
-                encoded_content = response_data["data"]["content"]
-                decoded_content = base64.b64decode(encoded_content).decode("utf-8")
-                error_data = json.loads(decoded_content)
-                error_message = error_data[0]["returnMessage"]
-                frappe.throw(msg=error_message)
+                encoded = response_data["data"]["content"]
+                decoded = base64.b64decode(encoded).decode()
+                error_data = json.loads(decoded)
+                error_message = error_data[0].get("returnMessage")
+                log_integration_request("Failed", settings.server_url, headers, request_payload, response_data, error_message)
+                frappe.throw(error_message)
             else:
-                log_integration_request('Failed', server_url, headers, data_to_post, response_data, return_message)
-                frappe.throw(title="EFRIS API Error", msg=return_message)
-                doc.docstatus = 0
-                doc.save()
+                log_integration_request("Failed", settings.server_url, headers, request_payload, response_data, return_message)
+                frappe.throw(return_message)
 
-        except requests.exceptions.RequestException as e:
-            log_integration_request('Failed', server_url, headers, data_to_post, {}, str(e))
-            frappe.msgprint(f"Error making API request: {e}")
-            doc.docstatus = 0
-            doc.save()
+        except Exception as e:
+            log_integration_request("Failed", settings.server_url, headers, request_payload, {}, str(e))
+            frappe.throw(str(e))
+
+    doc.save()
