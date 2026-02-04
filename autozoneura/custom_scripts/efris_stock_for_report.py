@@ -110,7 +110,7 @@ def get_efris_t127_stock_report_data():
         cached = frappe.cache().get_value(cache_key)
         if cached:
             return {"success": True, "data": cached, "cached": True}
-        
+    
         settings = get_efris_settings()
         payload = {"pageNo": "", "pageSize": ""}
         request_data = build_t127_request(payload, settings)
