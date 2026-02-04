@@ -206,7 +206,7 @@ def validate_invoice_stock_before_efris(invoice_name):
                 'unit_price': record.get('unitPrice', 0)
             }
         
-        frappe.msgprint(f"Retrieved stock for {len(stock_lookup)} items from EFRIS", alert=True)
+        # frappe.msgprint(f"Retrieved stock for {len(stock_lookup)} items from EFRIS", alert=True)
         
         ## Build items map from invoice (using item_code as goodsCode)
         items_map = {}

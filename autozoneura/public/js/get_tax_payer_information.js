@@ -24,7 +24,7 @@ frappe.ui.form.on('Customer', {
                         
                         frappe.msgprint({
                             title: 'TIN Validation Success',
-                            message: 'Taxpayer verified!<br>Business: ' + data.business_name + '\'',
+                            message: 'Taxpayer verified!<br>Legal Name: ' + data.business_name + '\'',
                             indicator: 'green'
                         });
                         

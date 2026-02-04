@@ -51,6 +51,9 @@ doctype_js = {
     "Customer": "public/js/get_tax_payer_information.js",
     "Sales Invoice":[
         "public/js/query_individual_stocks.js",
+    ],
+    "Validate Tax Payer Information":[
+        "public/js/validate_tin.js"
     ]
     
 }
@@ -156,9 +159,9 @@ doc_events = {
     "Purchase Receipt": {
         "on_submit": "autozoneura.custom_scripts.stock_in.on_stock"
     },
-    "Stock Entry": {
-        "on_submit": "autozoneura.custom_scripts.stock_adjustment.stock_adjust"
-    },
+    # "Stock Entry": {
+    #     "on_submit": "autozoneura.custom_scripts.stock_adjustment.stock_adjust"
+    # },
     "Sales Invoice":{
         "on_submit": "autozoneura.custom_scripts.upload_invoice.on_send"
     }

@@ -149,7 +149,7 @@ def process_tin_response(response_data, server_url, headers, data_to_post, statu
         "legal_name": taxpayer.get("legalName", "")
     }
 
-## MAIN API ENDPOINT
+## Main API Endpoint
 
 @frappe.whitelist()
 def query_tax_payer(tax_id, customer_name=""):
