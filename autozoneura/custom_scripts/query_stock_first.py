@@ -63,8 +63,8 @@ def decrypt_aes_content(encrypted_content, aes_key):
         frappe.throw(_("Failed to decrypt EFRIS response"))
 
 
-def build_t128_request(payload, settings):
-    """Build T128 request with encryption"""
+def build_t127_request(payload, settings):
+    """Build T127 request with encryption - T127 returns all configured items"""
     ## Encrypt payload
     encrypted_result = encrypt_dynamic_json(payload)
     if not encrypted_result.get("success"):
@@ -89,7 +89,7 @@ def build_t128_request(payload, settings):
             "appId": "AP04",
             "version": "1.1.20191201",
             "dataExchangeId": data_exchange_id,
-            "interfaceCode": "T128",
+            "interfaceCode": "T127",  ## T127 returns all configured items
             "requestCode": "TP",
             "requestTime": current_time,
             "responseCode": "TA",
@@ -131,14 +131,14 @@ def send_efris_request(server_url, request_data):
 
 
 def get_efris_stock_all(settings):
-    """Query ALL stock from EFRIS using T128 interface"""
-    ## Build request payload for T128
+    """Query ALL configured items from EFRIS using T127 interface"""
+    ## Build request payload for T127
     payload = {
-        "pageNo": "1",
-        "pageSize": "1000"
+        "pageNo": "",
+        "pageSize": ""
     }
     
-    request_data = build_t128_request(payload, settings)
+    request_data = build_t127_request(payload, settings)
     
     ## Send request
     try:
@@ -147,7 +147,7 @@ def get_efris_stock_all(settings):
         frappe.throw(_(f"EFRIS request failed: {str(e)}"))
     
     ## Log request
-    log_integration_request('Completed', settings['url'], {}, request_data, response_data, "T128 Stock Query")
+    log_integration_request('Completed', settings['url'], {}, request_data, response_data, "T127 Stock Query")
     
     ## Check response status
     return_message = response_data.get("returnStateInfo", {}).get("returnMessage", "")
@@ -164,12 +164,6 @@ def get_efris_stock_all(settings):
     
     decrypted_data = decrypt_aes_content(encrypted_content, settings["aes_key"])
     
-    ## Log decrypted response
-    frappe.log_error(
-        title="EFRIS Stock Response (Decrypted)",
-        message=json.dumps(decrypted_data, indent=2)
-    )
-    
     return decrypted_data
 
 
@@ -177,6 +171,7 @@ def get_efris_stock_all(settings):
 def validate_invoice_stock_before_efris(invoice_name):
     """
     Validate Sales Invoice items against EFRIS stock.
+    Uses item_code from Sales Invoice Item as goodsCode for EFRIS lookup.
     
     Args:
         invoice_name: Sales Invoice name
@@ -211,13 +206,13 @@ def validate_invoice_stock_before_efris(invoice_name):
                 'unit_price': record.get('unitPrice', 0)
             }
         
-        frappe.msgprint(f"Retrieved stock data for {len(stock_lookup)} items from EFRIS", alert=True)
+        frappe.msgprint(f"Retrieved stock for {len(stock_lookup)} items from EFRIS", alert=True)
         
-        ## Build items map from invoice
+        ## Build items map from invoice (using item_code as goodsCode)
         items_map = {}
         
         for item in invoice.items:
-            ## Use item_code as the goods code (this is what matches EFRIS)
+            ## Use item_code as the goods code
             goods_code = item.item_code
             
             if not goods_code:
@@ -234,17 +229,6 @@ def validate_invoice_stock_before_efris(invoice_name):
                     'rows': [item.idx]
                 }
         
-        ## Log what we found for debugging
-        frappe.log_error(
-            title="EFRIS Stock Lookup Map",
-            message=f"Available goods codes in EFRIS:\n" + "\n".join([f"- {code}: {info['stock']} units" for code, info in list(stock_lookup.items())[:20]])
-        )
-        
-        frappe.log_error(
-            title="Invoice Items Map", 
-            message=f"Items to validate:\n" + "\n".join([f"- {code}: {info['item_name']} (need {info['qty']})" for code, info in items_map.items()])
-        )
-        
         ## Validate each invoice item against EFRIS stock
         out_of_stock = []
         sufficient_stock = []
@@ -259,7 +243,7 @@ def validate_invoice_stock_before_efris(invoice_name):
                 missing_items.append({
                     'goods_code': goods_code,
                     'item_name': item_name,
-                    'message': f"❌ {item_name} ({goods_code}) - NOT FOUND IN EFRIS"
+                    'required': required_qty
                 })
                 continue
             
@@ -274,54 +258,56 @@ def validate_invoice_stock_before_efris(invoice_name):
                     'item_name': item_name,
                     'required': required_qty,
                     'available': available_stock,
-                    'shortage': shortage,
-                    'message': f"❌ {item_name} ({goods_code}): Need {required_qty}, Available {available_stock}, Short by {shortage}"
+                    'shortage': shortage
                 })
             else:
                 sufficient_stock.append({
                     'goods_code': goods_code,
                     'item_name': item_name,
                     'required': required_qty,
-                    'available': available_stock,
-                    'message': f"✅ {item_name} ({goods_code}): Available {available_stock} (need {required_qty})"
+                    'available': available_stock
                 })
         
-        ## Display results
+        ## Display success messages
         if sufficient_stock:
-            for item in sufficient_stock:
-                frappe.msgprint(item['message'], indicator='green')
+            success_items = "<br>".join([
+                f"✅ {item['goods_code']}: <span style='color: green; font-weight: bold;'>{item['available']}</span> available"
+                for item in sufficient_stock
+            ])
+            frappe.msgprint(success_items, title="Validation Passed", indicator='green')
         
         ## If any items missing or out of stock, throw error
         if missing_items or out_of_stock:
-            error_messages = []
+            error_details = []
             
             if missing_items:
-                error_messages.append("<b>Items Not Found in EFRIS:</b>")
+                error_details.append("<h5>Items Not Found in EFRIS:</h5>")
+                error_details.append("<table class='table table-bordered'><tr><th>Item Code</th><th>Item Name</th><th>Required Qty</th></tr>")
                 for item in missing_items:
-                    error_messages.append(f"• {item['message']}")
-                error_messages.append("")
+                    error_details.append(f"<tr><td>{item['goods_code']}</td><td>{item['item_name']}</td><td style='color: green; font-weight: bold;'>{item['required']}</td></tr>")
+                error_details.append("</table><br>")
             
             if out_of_stock:
-                error_messages.append("<b>Insufficient Stock:</b>")
+                error_details.append("<h5>Insufficient Stock:</h5>")
+                error_details.append("<table class='table table-bordered'><tr><th>Item Code</th><th>Item Name</th><th>Required</th><th>Available</th><th>Short</th></tr>")
                 for item in out_of_stock:
-                    error_messages.append(f"• {item['message']}")
-                error_messages.append("")
+                    error_details.append(f"<tr><td>{item['goods_code']}</td><td>{item['item_name']}</td><td style='color: green; font-weight: bold;'>{item['required']}</td><td style='color: orange; font-weight: bold;'>{item['available']}</td><td style='color:red; font-weight: bold;'>{item['shortage']}</td></tr>")
+                error_details.append("</table><br>")
             
-            error_messages.append("<b>Action Required:</b>")
-            error_messages.append("Please update stock quantities in EFRIS before submitting this invoice.")
+            error_details.append("<p><b>Action Required:</b> Update stock in EFRIS before submitting.</p>")
             
-            frappe.throw("<br>".join(error_messages), title="❌ Stock Validation Failed")
+            frappe.throw("".join(error_details), title="Stock Validation Failed")
         
         ## All items have sufficient stock
-        success_message = f"""
-        <div style="padding: 15px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 5px;">
-            <h4 style="color: #155724; margin-top: 0;">✅ Stock Validation Passed!</h4>
-            <p style="margin: 10px 0;">All {len(sufficient_stock)} items have sufficient stock in EFRIS.</p>
-            <p style="margin: 10px 0;"><b>Invoice {invoice_name} is ready for submission.</b></p>
-        </div>
-        """
+        # success_message = f"""
+        # <div style="padding: 15px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 5px;">
+        #     <h4 style="color: #155724; margin-top: 0;">✅ Stock Validation Passed!</h4>
+        #     <p>All {len(sufficient_stock)} item(s) have sufficient stock in EFRIS.</p>
+        #     <p><b>Invoice {invoice_name} is ready for submission.</b></p>
+        # </div>
+        # """
         
-        frappe.msgprint(success_message, title="Stock Validation Success", indicator='green')
+        # frappe.msgprint(success_message, title="Validation Success", indicator='green')
         
         return {
             "success": True,
@@ -329,14 +315,9 @@ def validate_invoice_stock_before_efris(invoice_name):
             "total_items": len(items_map),
             "sufficient_stock": len(sufficient_stock),
             "out_of_stock": len(out_of_stock),
-            "missing_items": len(missing_items),
-            "details": {
-                "sufficient": sufficient_stock,
-                "insufficient": out_of_stock,
-                "missing": missing_items
-            }
+            "missing_items": len(missing_items)
         }
         
     except Exception as e:
-        frappe.log_error(str(e), "EFRIS Stock Validation Error")
+        frappe.log_error(str(e), "Stock Validation Error")
         frappe.throw(str(e))

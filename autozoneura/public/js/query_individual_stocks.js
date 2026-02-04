@@ -1,8 +1,8 @@
 frappe.ui.form.on('Sales Invoice', {
     refresh: function(frm) {
         // Add button only if invoice is in Draft state
-        if (frm.doc.docstatus === 1) {
-            frm.add_custom_button(__('Check EFRIS Stock'), function() {
+        if (frm.doc.docstatus === 0) {
+            frm.add_custom_button(__('Validate Efris Stock'), function() {
                 // Call server-side validation
                 frappe.call({
                     method: "autozoneura.custom_scripts.query_stock_first.validate_invoice_stock_before_efris",
