@@ -37,7 +37,8 @@
    "description": "Endpoint for connecting to URA Efris",
    "fieldname": "server_url",
    "fieldtype": "Data",
-   "label": "Server URL"
+   "label": "Server URL",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_naki",
@@ -47,7 +48,8 @@
    "description": "Device Number associated to TIN Number either TCS.... or 1....",
    "fieldname": "device_number",
    "fieldtype": "Data",
-   "label": "Device Number"
+   "label": "Device Number",
+   "read_only": 1
   },
   {
    "fieldname": "company_details_section",
@@ -59,6 +61,7 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Legal Name",
+   "read_only": 1,
    "reqd": 1
   },
   {
@@ -67,12 +70,14 @@
    "in_list_view": 1,
    "label": "Company",
    "options": "Company",
+   "read_only": 1,
    "reqd": 1
   },
   {
    "fieldname": "branch_id",
    "fieldtype": "Data",
-   "label": "Branch ID"
+   "label": "Branch ID",
+   "read_only": 1
   },
   {
    "fieldname": "line_phone",
@@ -82,7 +87,8 @@
   {
    "fieldname": "email_phone",
    "fieldtype": "Data",
-   "label": "Email Phone"
+   "label": "Email Phone",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_fccm",
@@ -92,27 +98,32 @@
    "description": "TIN for the Company associated with EFRIS Account",
    "fieldname": "tin",
    "fieldtype": "Data",
-   "label": "TIN"
+   "label": "TIN",
+   "read_only": 1
   },
   {
    "fieldname": "business_name",
    "fieldtype": "Data",
-   "label": "Business Name"
+   "label": "Business Name",
+   "read_only": 1
   },
   {
    "fieldname": "brn",
    "fieldtype": "Data",
-   "label": "BRN"
+   "label": "BRN",
+   "read_only": 1
   },
   {
    "fieldname": "mobile_phone",
    "fieldtype": "Data",
-   "label": "Mobile Phone"
+   "label": "Mobile Phone",
+   "read_only": 1
   },
   {
    "fieldname": "address",
    "fieldtype": "Data",
-   "label": "Address"
+   "label": "Address",
+   "read_only": 1
   },
   {
    "fieldname": "place_of_business",
@@ -134,15 +145,16 @@
    "description": "Expires after 24hrs",
    "fieldname": "aes_key",
    "fieldtype": "Data",
-   "label": "AES Key"
+   "label": "AES Key",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-01-08 11:58:47.402702",
- "modified_by": "Administrator",
+ "modified": "2026-02-05 09:53:38.260161",
+ "modified_by": "ernestben69@gmail.com",
  "module": "Autozoneura",
  "name": "EFRIS Settings",
  "owner": "Administrator",

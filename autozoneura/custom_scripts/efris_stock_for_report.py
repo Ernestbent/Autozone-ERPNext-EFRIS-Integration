@@ -46,7 +46,7 @@ def log_integration_request(status, url, headers, data, response, service=""):
         pass
 
 def decrypt_aes_content(encrypted_content, aes_key):
-    """ Returns stock records only"""
+    """Returns stock records only"""
     try:
         aes_key_bytes = bytes.fromhex(aes_key)
         encrypted_data = base64.b64decode(encrypted_content)
@@ -104,22 +104,17 @@ def send_efris_request(server_url, request_data):
 
 @frappe.whitelist()
 def get_efris_t127_stock_report_data():
-    """ Returns Only stock quantities"""
+    """🚀 LIVE EFRIS STOCK - NO CACHE! FRESH EVERY CALL"""
     try:
-        cache_key = "efris_t127_stock"
-        cached = frappe.cache().get_value(cache_key)
-        if cached:
-            return {"success": True, "data": cached, "cached": True}
-    
         settings = get_efris_settings()
         payload = {"pageNo": "", "pageSize": ""}
         request_data = build_t127_request(payload, settings)
         response_data = send_efris_request(settings['url'], request_data)
         
-        log_integration_request('Completed', settings['url'], {}, request_data, response_data, "T127 Stock")
+        log_integration_request('Completed', settings['url'], {}, request_data, response_data, "T127 Stock LIVE")
         
         if response_data.get("returnStateInfo", {}).get("returnMessage") != "SUCCESS":
-            return {"success": False, "message": "EFRIS error"}
+            return {"success": False, "message": response_data.get("returnStateInfo", {}).get("returnMessage", "EFRIS error")}
         
         records = decrypt_aes_content(response_data["data"]["content"], settings["aes_key"])
         
@@ -131,8 +126,14 @@ def get_efris_t127_stock_report_data():
                 "stock_qty": float(record.get('stock', 0))
             })
         
-        frappe.cache().set_value(cache_key, stock_data)
-        return {"success": True, "data": stock_data, "total_items": len(stock_data)}
+        return {
+            "success": True, 
+            "data": stock_data, 
+            "total_items": len(stock_data),
+            "live": True,
+            "fetched_at": datetime.now(eat_timezone).strftime("%Y-%m-%d %H:%M:%S EAT")
+        }
         
     except Exception as e:
+        frappe.log_error(f"T127 Error: {str(e)}", "EFRIS T127")
         return {"success": False, "message": str(e)}

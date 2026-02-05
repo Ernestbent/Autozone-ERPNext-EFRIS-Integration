@@ -237,7 +237,6 @@ def process_invoice_items(items):
 
     return goods_details, list(tax_categories.values()), item_count
 
-
 def build_seller_details(efris_settings, doc):
     """Build seller details section"""
     return {
@@ -245,11 +244,11 @@ def build_seller_details(efris_settings, doc):
         "ninBrn": clean_brn(efris_settings.brn),
         "legalName": efris_settings.legal_name,
         "businessName": efris_settings.business_name,
-        "address": doc.company_address or "",
+        "address": "999 MBOGO ROAD OPPOSITE MBOGO COLLEGE KAWEMPE KAMPALA KAWEMPE DIVISION NORTH KAWEMPE DIVISION KAWEMPE 1",
         "mobilePhone": efris_settings.mobile_phone,
         "linePhone": efris_settings.line_phone,
         "emailAddress": efris_settings.email_phone,
-        "placeOfBusiness": doc.company_address or "",
+        "placeOfBusiness": efris_settings.place_of_business,
         "referenceNo": doc.name,
         "branchId": "",
         "isCheckReferenceNo": "",
@@ -258,12 +257,20 @@ def build_seller_details(efris_settings, doc):
 
 def build_basic_information(efris_settings, doc, datetime_combined):
     """Build basic information section"""
+
+    ## Get full name of document owner
+    owner_full_name = frappe.db.get_value(
+        "User",
+        doc.owner,
+        "full_name"
+    ) or doc.owner
+
     return {
         "invoiceNo": "",
         "antifakeCode": "",
         "deviceNo": efris_settings.device_number,
         "issuedDate": datetime_combined,
-        "operator": efris_settings.legal_name,
+        "operator": owner_full_name,
         "currency": "UGX",
         "oriInvoiceId": "",
         "invoiceType": "1",
@@ -272,7 +279,6 @@ def build_basic_information(efris_settings, doc, datetime_combined):
         "invoiceIndustryCode": "101",
         "isBatch": "0",
     }
-
 
 def build_buyer_details(doc):
     """Build buyer details section"""
@@ -424,17 +430,18 @@ def build_invoice_data(efris_settings, doc, datetime_combined):
 
 
 def build_global_info(efris_settings, doc, total_tax_amount, goods_details):
-    """
-    Build global info section for API request
-   
-    """
-    ## Generate unique data exchange ID
     data_exchange_id = uuid.uuid4().hex[:32]
     current_time = datetime.now(EAT_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
-    
-    ## Prepare item description (max 100 chars)
+
+    ## Get document owner full name
+    owner_full_name = frappe.db.get_value(
+        "User",
+        doc.owner,
+        "full_name"
+    ) or doc.owner
+
     item_description = ", ".join([item["item"] for item in goods_details[:3]])[:100]
-    
+
     return {
         "appId": "AP04",
         "version": "1.1.20191201",
@@ -456,11 +463,11 @@ def build_global_info(efris_settings, doc, total_tax_amount, goods_details):
             "responseDateFormat": "dd/MM/yyyy",
             "responseTimeFormat": "dd/MM/yyyy HH:mm:ss",
             "referenceNo": doc.name,
-            "operatorName": efris_settings.legal_name,
+            "operatorName": owner_full_name,  ## FIXED
             "itemDescription": item_description,
             "currency": "UGX",
             "grossAmount": str(round(doc.total, 2)),
-            "taxAmount": str(round(total_tax_amount, 2))
+            "taxAmount": str(round(total_tax_amount, 2)),
         },
     }
 
