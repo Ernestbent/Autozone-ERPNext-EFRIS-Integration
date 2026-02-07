@@ -173,7 +173,7 @@ def handle_efris_response(doc, response_data, server_url, data_to_post):
     """Process response, log, and update document."""
     return_message = response_data.get("returnStateInfo", {}).get("returnMessage", "")
     
-    status = 'Completed' if response_data.get("status_code") == 200 else 'Failed'  # Use actual status_code from response_data
+    status = 'Completed' if response_data.get("status_code") == 200 else 'Failed' 
     log_integration_request(status, server_url, {}, data_to_post, response_data, return_message)
     
     # Store in custom fields
@@ -188,7 +188,6 @@ def handle_efris_response(doc, response_data, server_url, data_to_post):
         frappe.msgprint(f"EFRIS Response: {return_message}. Details in Integration Request.", title="EFRIS API", indicator="orange")
 
 ## Main Hook
-
 def on_stock(doc, event):
     """Main hook for Stock Entry/Purchase Receipt submit event."""
     if not doc.custom_efris_stock:

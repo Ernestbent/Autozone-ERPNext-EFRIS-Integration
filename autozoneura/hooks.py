@@ -163,7 +163,8 @@ doc_events = {
         "on_submit": "autozoneura.custom_scripts.stock_adjustment.stock_adjust"
     },
     "Sales Invoice":{
-        "on_submit": "autozoneura.custom_scripts.upload_invoice.on_send"
+        "on_submit": "autozoneura.custom_scripts.upload_invoice.on_send",
+        "validate": "autozoneura.custom_scripts.issue_credit_note.process_credit_note"
     }
 }
 
