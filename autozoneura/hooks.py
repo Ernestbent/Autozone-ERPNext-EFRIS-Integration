@@ -162,10 +162,15 @@ doc_events = {
     "Stock Entry": {
         "on_submit": "autozoneura.custom_scripts.stock_adjustment.stock_adjust"
     },
-    "Sales Invoice":{
-        "on_submit": "autozoneura.custom_scripts.upload_invoice.on_send",
-        "validate": "autozoneura.custom_scripts.issue_credit_note.process_credit_note"
-    }
+    # "Sales Invoice":{
+    #     "on_submit": "autozoneura.custom_scripts.upload_invoice.on_send",
+    #     "validate": "autozoneura.custom_scripts.issue_credit_note.process_credit_note"
+    # }
+    "Sales Invoice": {
+    "on_submit": "autozoneura.custom_scripts.upload_invoice.on_send"
+    # Optional: Add this if you want validation
+    # "validate": "autozoneura.custom_scripts.upload_invoice.validate_efris_fields"
+}
 }
 
 # Scheduled Tasks

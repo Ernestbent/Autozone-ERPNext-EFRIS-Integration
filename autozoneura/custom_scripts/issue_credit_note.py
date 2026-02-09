@@ -320,6 +320,9 @@ def build_credit_note_data(efris_settings, doc, datetime_combined):
     if not goods_details:
         raise EFRISIntegrationError("No items found in the credit note")
     
+    ## Log goods details for debugging
+    frappe.logger().info(f"Credit Note Goods Details: {json.dumps(goods_details, indent=2)}")
+    
     ## Build credit note data structure
     credit_note_data = {
         "oriInvoiceId": doc.custom_invoice_number,
@@ -452,6 +455,59 @@ def update_credit_note_with_response(doc, decrypted_data):
     doc.custom_reference_number = decrypted_data.get("referenceNo", "")
 
 
+def validate_credit_note_quantities(doc):
+    """
+    Validate that credit note quantities don't exceed original invoice quantities
+    
+    Args:
+        doc: Credit note (return) Sales Invoice document
+    """
+    if not doc.return_against:
+        return
+    
+    ## Get original invoice
+    try:
+        original_invoice = frappe.get_doc("Sales Invoice", doc.return_against)
+    except Exception as e:
+        frappe.throw(f"Cannot fetch original invoice {doc.return_against}: {str(e)}")
+    
+    ## Build a map of original invoice items
+    original_items = {}
+    for item in original_invoice.items:
+        original_items[item.item_code] = {
+            "qty": item.qty,
+            "item_name": item.item_name
+        }
+    
+    ## Validate credit note items
+    errors = []
+    for item in doc.items:
+        if item.item_code in original_items:
+            original_qty = original_items[item.item_code]["qty"]
+            return_qty = abs(item.qty)  # Credit note has negative qty
+            
+            if return_qty > original_qty:
+                errors.append(
+                    f"Item '{item.item_name}' (Code: {item.item_code}): "
+                    f"Cannot return {return_qty} units. "
+                    f"Original invoice only has {original_qty} units."
+                )
+        else:
+            errors.append(
+                f"Item '{item.item_name}' (Code: {item.item_code}) "
+                f"was not found in original invoice {doc.return_against}"
+            )
+    
+    if errors:
+        error_msg = "<br>".join(errors)
+        frappe.throw(
+            title="Credit Note Quantity Validation Failed",
+            msg=error_msg
+        )
+    
+    frappe.logger().info(f"Credit note quantities validated successfully for {doc.name}")
+
+
 def submit_to_efris(efris_settings, data_to_post):
     """
     Submit credit note data to EFRIS API
@@ -521,6 +577,10 @@ def process_credit_note(doc, event):
         return
     
     try:
+        ## Validate against original invoice if return_against is set
+        if doc.return_against:
+            validate_credit_note_quantities(doc)
+        
         ## Get EFRIS settings
         efris_settings = get_efris_settings()
         

@@ -606,13 +606,28 @@ def handle_efris_response(doc, response_data, headers, server_url, data_to_post)
 
 def on_send(doc, event):
     """
-    Hook for Sales Invoice submission to EFRIS
-    
+    Main entry point for ALL EFRIS submissions
+    Routes invoices to T109 and credit notes to T110
     """
-    ## Skip if not EFRIS invoice or is a return
-    if not doc.custom_efris_invoice or doc.is_return:
+    ## Skip if not EFRIS invoice
+    if not doc.custom_efris_invoice:
         return
     
+    ## Route based on document type
+    if doc.is_return:
+        # Route to T110 Credit Note handler
+        from autozoneura.custom_scripts.issue_credit_note import process_credit_note
+        process_credit_note(doc, event)  # ⬅️ PASS THE EVENT PARAMETER
+        return  # ⬅️ CRITICAL: Stop here for credit notes!
+    
+    # Only process regular invoices below
+    process_regular_invoice(doc)
+
+
+def process_regular_invoice(doc):
+    """
+    Process T109 regular invoice submission
+    """
     try:
         ## Get EFRIS settings
         efris_settings = get_efris_settings()
@@ -658,5 +673,37 @@ def on_send(doc, event):
         )
         frappe.throw(error_msg)
 
+
 #################################
-#Process Credit Notes using T110 interface code
+# Optional: Add validation function for hooks
+def validate_efris_fields(doc, method):
+    """
+    Validate EFRIS fields before submission
+    Can be used as a validate hook
+    """
+    if not doc.custom_efris_invoice:
+        return
+    
+    # Common validations
+    if not doc.tax_id:
+        frappe.throw("Customer TIN is required for EFRIS invoices")
+    
+    # Type-specific validations
+    if doc.is_return:
+        validate_credit_note_fields(doc)
+    else:
+        validate_invoice_fields(doc)
+
+def validate_credit_note_fields(doc):
+    """Validate credit note specific fields"""
+    if not doc.return_against:
+        frappe.throw("Original Invoice (Return Against) is required for credit notes")
+    
+    # Check if original invoice exists
+    if not frappe.db.exists("Sales Invoice", doc.return_against):
+        frappe.throw(f"Original invoice {doc.return_against} does not exist")
+
+def validate_invoice_fields(doc):
+    """Validate invoice specific fields"""
+    # Add any invoice-specific validations here
+    pass
