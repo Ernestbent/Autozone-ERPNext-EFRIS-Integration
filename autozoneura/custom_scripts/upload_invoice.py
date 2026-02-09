@@ -7,7 +7,7 @@ import requests
 
 from autozoneura.autozoneura.background_tasks.encryption import encrypt_dynamic_json
 from autozoneura.autozoneura.background_tasks.decryption import decrypt_string
-
+from autozoneura.custom_scripts.issue_credit_note import process_credit_note
 ## East Africa Time (UTC+3)
 EAT_TIMEZONE = timezone(timedelta(hours=3))
 
@@ -615,10 +615,9 @@ def on_send(doc, event):
     
     ## Route based on document type
     if doc.is_return:
-        # Route to T110 Credit Note handler
-        from autozoneura.custom_scripts.issue_credit_note import process_credit_note
-        process_credit_note(doc, event)  # ⬅️ PASS THE EVENT PARAMETER
-        return  # ⬅️ CRITICAL: Stop here for credit notes!
+        # No import here anymore - already imported at top
+        process_credit_note(doc, event)
+        return
     
     # Only process regular invoices below
     process_regular_invoice(doc)
