@@ -610,8 +610,8 @@ def on_send(doc, event):
     Routes invoices to T109 and credit notes to T110
     """
     ## Skip if not EFRIS invoice
-    if not doc.custom_efris_invoice:
-        return
+    # if not doc.custom_efris_invoice:
+    #     return
     
     ## Route based on document type
     if doc.is_return:
@@ -673,7 +673,6 @@ def process_regular_invoice(doc):
         frappe.throw(error_msg)
 
 
-#################################
 # Optional: Add validation function for hooks
 def validate_efris_fields(doc, method):
     """

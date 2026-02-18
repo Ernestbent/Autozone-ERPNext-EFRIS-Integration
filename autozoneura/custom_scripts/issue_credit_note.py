@@ -569,12 +569,12 @@ def process_credit_note(doc, event):
     This function should be called when a return sales invoice is submitted
     """
     ## Only process if it's a return (credit note)
-    if not doc.is_return:
-        return
+    # if not doc.is_return:
+    #     return
     
     ## Skip if not EFRIS invoice
-    if not doc.custom_efris_invoice:
-        return
+    # if not doc.custom_efris_invoice:
+    #     return
     
     try:
         ## Validate against original invoice if return_against is set

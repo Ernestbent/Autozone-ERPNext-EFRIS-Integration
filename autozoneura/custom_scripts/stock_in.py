@@ -190,8 +190,8 @@ def handle_efris_response(doc, response_data, server_url, data_to_post):
 ## Main Hook
 def on_stock(doc, event):
     """Main hook for Stock Entry/Purchase Receipt submit event."""
-    if not doc.custom_efris_stock:
-        return
+    # if not doc.custom_efris_stock:
+    #     return
     
     try:
         settings = get_efris_settings()
