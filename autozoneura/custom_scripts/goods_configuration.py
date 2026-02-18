@@ -136,10 +136,6 @@ def send_efris_t130_request(server_url, request_data):
 def on_save(doc, event):
     """Handle Item save event for EFRIS T130 goods upload."""
     try:
-        # Skip if not EFRIS item
-        # if not doc.custom_efris_item:
-        #     return
-        
         # Get validated settings
         settings = get_efris_settings()
         
