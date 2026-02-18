@@ -1,7 +1,8 @@
 frappe.ui.form.on('Sales Invoice', {
     refresh: function(frm) {
-        // Only show button if the document is submitted and is a return (credit note)
+        // Only show buttons if the document is submitted and is a return (credit note)
         if (frm.doc.docstatus === 1 && frm.doc.is_return) {
+
             frm.add_custom_button(__('Query Credit Note Details'), function() {
                 get_credit_note_number(frm);
             }, __("Credit Note Actions"));
@@ -14,8 +15,11 @@ frappe.ui.form.on('Sales Invoice', {
 });
 
 
+// ─────────────────────────────────────────────
+// Query Credit Note Number + ID (T111)
+// ─────────────────────────────────────────────
+
 function get_credit_note_number(frm) {
-    // Validate required fields before calling API
     if (!frm.doc.custom_reference_number || !frm.doc.custom_fdn) {
         frappe.msgprint({
             title: __('Missing Fields'),
@@ -25,9 +29,10 @@ function get_credit_note_number(frm) {
         return;
     }
 
-        frappe.call({
+    frappe.call({
         method: "autozoneura.custom_scripts.query_credit_note_details.query_credit_note",
         args: {
+            invoice_name:            frm.doc.name,
             custom_reference_number: frm.doc.custom_reference_number,
             custom_fdn:              frm.doc.custom_fdn,
         },
@@ -38,18 +43,11 @@ function get_credit_note_number(frm) {
                 let data = response.message;
 
                 if (data.credit_note_no || data.id) {
-                    // Set values on the form
-                    frm.set_value("custom_credit_note_number", data.credit_note_no || "");
-                    frm.set_value("custom_id", data.id || "");
-
-                    // Save the document to persist the values
-                    frm.save().then(() => {
-                        frappe.show_alert({
-                            message: __('Credit Note details saved successfully.'),
-                            indicator: 'green'
-                        }, 5);
-                    });
-
+                    frappe.show_alert({
+                        message: __('Credit Note details saved successfully.'),
+                        indicator: 'green'
+                    }, 5);
+                    frm.reload_doc(); // server already saved via db.set_value
                 } else {
                     frappe.msgprint({
                         title: __('Incomplete Response'),
@@ -80,38 +78,54 @@ function get_credit_note_number(frm) {
     });
 }
 
-// Function to get verification code for credit note
+
+// ─────────────────────────────────────────────
+// Query Verification Code + QR Code (T108)
+// ─────────────────────────────────────────────
+
 function get_verification_code_for_cn(frm) {
     if (!frm.doc.custom_credit_note_number) {
-        frappe.msgprint(__('Please enter Credit Note Number before proceeding.'));
+        frappe.msgprint({
+            title: __('Missing Field'),
+            message: __('Please query the <b>Credit Note Number</b> first before fetching the verification code.'),
+            indicator: 'orange'
+        });
         return;
     }
 
     frappe.call({
         method: "autozoneura.custom_scripts.query_verification_code_ccn.query_verification_code_cn",
         args: {
-            credit_note_number: frm.doc.custom_credit_note_number
+            invoice_name:       frm.doc.name,                      // required by server
+            credit_note_number: frm.doc.custom_credit_note_number,
         },
+        freeze: true,
+        freeze_message: __('Querying EFRIS for Verification Code...'),
         callback: function(response) {
             if (response.message && response.message.status === "success") {
-                let data = response.message;
-
-                if (data.verification_code || data.qr_code_efris) {
-                    frm.set_value("custom_verification_codecn", data.verification_code || "");  
-                    frm.set_value("custom_qr_code_credit_note_", data.qr_code_efris || "");  
-
-                    frappe.msgprint(__('Verification Code retrieved successfully.'));
-                    frm.refresh(); 
-                } else {
-                    frappe.msgprint(__('Verification Code missing in the response.'));
-                }
+                frappe.show_alert({
+                    message: __('Verification Code saved successfully.'),
+                    indicator: 'green'
+                }, 5);
+                frm.reload_doc(); // server already saved via db.set_value
             } else {
-                let errorMessage = response.message ? response.message.message : "Unknown error";
-                frappe.msgprint(__('Failed to retrieve Verification Code: ') + errorMessage);
+                let error_msg = (response.message && response.message.message)
+                    ? response.message.message
+                    : __('Unknown error occurred.');
+
+                frappe.msgprint({
+                    title: __('Query Failed'),
+                    message: __('Failed to retrieve Verification Code: ') + error_msg,
+                    indicator: 'red'
+                });
             }
         },
         error: function(error) {
-            frappe.msgprint(__('Error in API call: ') + error.message);
+            frappe.msgprint({
+                title: __('API Error'),
+                message: __('An error occurred while calling the API: ') + (error.message || ''),
+                indicator: 'red'
+            });
         }
     });
 }

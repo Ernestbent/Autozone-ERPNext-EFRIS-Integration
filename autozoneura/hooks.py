@@ -165,7 +165,8 @@ doc_events = {
     },
     "Sales Invoice":{
         "on_submit": "autozoneura.custom_scripts.upload_invoice.on_send",
-        "validate": "autozoneura.custom_scripts.issue_credit_note.process_credit_note"
+        "validate": "autozoneura.custom_scripts.issue_credit_note.process_credit_note",
+        "on_cancel":"autozoneura.custom_scripts.cancel_credit_note.on_cancel"
     }
     
     # "Sales Invoice": {
