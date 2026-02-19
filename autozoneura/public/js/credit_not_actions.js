@@ -14,11 +14,7 @@ frappe.ui.form.on('Sales Invoice', {
     }
 });
 
-
-// ─────────────────────────────────────────────
 // Query Credit Note Number + ID (T111)
-// ─────────────────────────────────────────────
-
 function get_credit_note_number(frm) {
     if (!frm.doc.custom_reference_number || !frm.doc.custom_fdn) {
         frappe.msgprint({
@@ -47,7 +43,7 @@ function get_credit_note_number(frm) {
                         message: __('Credit Note details saved successfully.'),
                         indicator: 'green'
                     }, 5);
-                    frm.reload_doc(); // server already saved via db.set_value
+                    frm.reload_doc(); 
                 } else {
                     frappe.msgprint({
                         title: __('Incomplete Response'),
@@ -78,11 +74,7 @@ function get_credit_note_number(frm) {
     });
 }
 
-
-// ─────────────────────────────────────────────
 // Query Verification Code + QR Code (T108)
-// ─────────────────────────────────────────────
-
 function get_verification_code_for_cn(frm) {
     if (!frm.doc.custom_credit_note_number) {
         frappe.msgprint({
@@ -96,7 +88,7 @@ function get_verification_code_for_cn(frm) {
     frappe.call({
         method: "autozoneura.custom_scripts.query_verification_code_ccn.query_verification_code_cn",
         args: {
-            invoice_name:       frm.doc.name,                      // required by server
+            invoice_name:       frm.doc.name,                     
             credit_note_number: frm.doc.custom_credit_note_number,
         },
         freeze: true,
@@ -107,7 +99,7 @@ function get_verification_code_for_cn(frm) {
                     message: __('Verification Code saved successfully.'),
                     indicator: 'green'
                 }, 5);
-                frm.reload_doc(); // server already saved via db.set_value
+                frm.reload_doc(); 
             } else {
                 let error_msg = (response.message && response.message.message)
                     ? response.message.message
