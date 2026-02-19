@@ -7,11 +7,7 @@ from autozoneura.autozoneura.background_tasks.decryption import decrypt_string
 
 eat_timezone = timezone(timedelta(hours=3))
 
-
-# ─────────────────────────────────────────────
-# SETTINGS
-# ─────────────────────────────────────────────
-
+## Settings
 def get_efris_settings():
     """Extract and validate EFRIS settings from single doctype."""
     efris_settings = frappe.get_single("EFRIS Settings")
@@ -27,11 +23,7 @@ def get_efris_settings():
 
     return efris_settings
 
-
-# ─────────────────────────────────────────────
-# LOGGING
-# ─────────────────────────────────────────────
-
+## Logging
 def log_integration_request(status, url, headers, data, response, error=""):
     """Log integration requests to Integration Request doctype."""
     valid_statuses = ["", "Queued", "Authorized", "Completed", "Cancelled", "Failed"]
@@ -56,11 +48,7 @@ def log_integration_request(status, url, headers, data, response, error=""):
     except Exception:
         pass
 
-
-# ─────────────────────────────────────────────
-# PAYLOAD BUILDER
-# ─────────────────────────────────────────────
-
+## Payload Builder
 def build_credit_note_payload(reference_number, fdn):
     """Build T111 credit note query payload."""
     return {
@@ -81,11 +69,7 @@ def build_credit_note_payload(reference_number, fdn):
         "sellerLegalOrBusinessName": "",
     }
 
-
-# ─────────────────────────────────────────────
-# REQUEST BUILDER
-# ─────────────────────────────────────────────
-
+## Request Builder
 def build_t111_request(payload, efris_settings):
     """Build complete T111 request structure."""
     encrypted_result = encrypt_dynamic_json(payload)
@@ -129,11 +113,7 @@ def build_t111_request(payload, efris_settings):
         "returnStateInfo": {"returnCode": "", "returnMessage": ""},
     }
 
-
-# ─────────────────────────────────────────────
-# HTTP HELPER
-# ─────────────────────────────────────────────
-
+## Http Helper
 def send_efris_request(server_url, data_to_post, headers):
     """Send request with timeout."""
     try:
@@ -144,11 +124,7 @@ def send_efris_request(server_url, data_to_post, headers):
     except requests.exceptions.RequestException as e:
         raise Exception(f"API Error: {str(e)}")
 
-
-# ─────────────────────────────────────────────
-# RESPONSE PROCESSOR
-# ─────────────────────────────────────────────
-
+## Process Response
 def process_credit_note_response(response_data, server_url, headers, data_to_post, status_code):
     """Process and decrypt T111 credit note response."""
     return_message = response_data.get("returnStateInfo", {}).get("returnMessage", "")
@@ -182,31 +158,64 @@ def process_credit_note_response(response_data, server_url, headers, data_to_pos
         "id":             records[0].get("id", "N/A"),
     }
 
+## Save to Sales Invoice
+def save_credit_note_to_invoice(invoice_name, credit_note_no, credit_note_id):
+    """Save credit note number and ID to Sales Invoice via db.set_value.
+    Uses db.set_value to bypass the submit restriction on field changes.
+    """
+    try:
+        frappe.db.set_value(
+            "Sales Invoice",
+            invoice_name,
+            {
+                "custom_credit_note_number": credit_note_no,
+                "custom_id":                 credit_note_id,
+            },
+            update_modified=False
+        )
+        frappe.db.commit()
+    except Exception as e:
+        frappe.log_error(str(e), "Credit Note Save Error")
+        frappe.throw(f"Failed to save credit note details to invoice: {str(e)}")
 
-# ─────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────
-
+# Main
 @frappe.whitelist()
-def query_credit_note(custom_reference_number=None, custom_fdn=None):
-    """Query credit note information from EFRIS T111 API."""
+def query_credit_note(invoice_name, custom_reference_number=None, custom_fdn=None):
+    """
+    Query credit note information from EFRIS T111 API
+    and save results to the Sales Invoice.
 
-    # 1. Get settings
+    Args:
+        invoice_name (str): Sales Invoice document name to update.
+        custom_reference_number (str): Reference number for query.
+        custom_fdn (str): Original invoice FDN.
+    """
+
+    # Get settings
     efris_settings = get_efris_settings()
 
-    # 2. Build request
+    # Build request
     headers      = {"Content-Type": "application/json"}
     payload      = build_credit_note_payload(custom_reference_number, custom_fdn)
     data_to_post = build_t111_request(payload, efris_settings)
 
-    # 3. Send and process
+    # Send and process
     try:
         response_data, status_code = send_efris_request(
             efris_settings.server_url, data_to_post, headers
         )
-        return process_credit_note_response(
+        result = process_credit_note_response(
             response_data, efris_settings.server_url, headers, data_to_post, status_code
         )
+
+        # Save to Sales Invoice via db.set_value (bypasses submit restriction)
+        save_credit_note_to_invoice(
+            invoice_name,
+            result["credit_note_no"],
+            result["id"]
+        )
+
+        return result
 
     except Exception as e:
         error_msg = str(e)
