@@ -55,6 +55,9 @@ doctype_js = {
     ],
     "Validate Tax Payer Information":[
         "public/js/validate_tin.js"
+    ],
+    "EFRIS Settings":[
+        "public/js/refresh_key.js"
     ]
     
 }
@@ -181,6 +184,14 @@ doc_events = {
 # ---------------
 
 scheduler_events = {
+    "cron": {
+        "0 1 * * *": [  # 1AM: test_efris_complete_flow
+            "autozoneura.autozoneura.background_tasks.efris_key_manager.test_efris_complete_flow"
+        ],
+        "0 2 * * *": [  # 2AM: T127 stock sync
+            "autozoneura.custom_scripts.efris_stock_for_report.get_efris_t127_stock_report_data"
+        ]
+    },
     "daily": [
         "autozoneura.autozoneura.background_tasks.efris_key_manager.refresh_efris_aes_key"
     ]
