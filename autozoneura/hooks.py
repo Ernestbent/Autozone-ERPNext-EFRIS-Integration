@@ -165,7 +165,7 @@ doc_events = {
     },
     "Sales Invoice":{
         "on_submit": "autozoneura.custom_scripts.upload_invoice.on_send",
-        "validate": "autozoneura.custom_scripts.issue_credit_note.process_credit_note",
+        "On_submit": "autozoneura.custom_scripts.issue_credit_note.process_credit_note",
         "on_cancel":"autozoneura.custom_scripts.cancel_credit_note.on_cancel"
     }
     
@@ -181,14 +181,6 @@ doc_events = {
 # ---------------
 
 scheduler_events = {
-    "cron": {
-        "0 1 * * *": [  # 1AM: test_efris_complete_flow
-            "autozoneura.autozoneura.background_tasks.efris_key_manager.test_efris_complete_flow"
-        ],
-        "0 2 * * *": [  # 2AM: T127 stock sync
-            "autozoneura.custom_scripts.efris_stock_for_report.get_efris_t127_stock_report_data"
-        ]
-    },
     "daily": [
         "autozoneura.autozoneura.background_tasks.efris_key_manager.refresh_efris_aes_key"
     ]

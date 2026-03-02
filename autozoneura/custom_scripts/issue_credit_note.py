@@ -118,20 +118,26 @@ def determine_tax_details(item_tax_template):
 
 def calculate_item_amounts(item, tax_details):
     """
-    Calculate tax and net amounts for an item
+    Calculate tax and net amounts for an item.
+    ERPNext stores return items with negative qty and negative amount.
+    We use abs() for calculation, then enforce negative sign for EFRIS T110.
     """
+    abs_amount = abs(item.amount)
+    abs_net_amount = abs(item.net_amount)
+
     if tax_details["is_exempt"]:
         tax = 0
-        grossAmount = item.amount
+        grossAmount = -abs_amount       ## Negative for EFRIS credit note
         taxAmount = 0
-        netAmount = item.amount
+        netAmount = -abs_amount         ## Negative for EFRIS credit note
     else:
         ## For standard tax (18%)
-        tax = round((item.amount - item.net_amount), 3)
-        grossAmount = item.amount
-        taxAmount = round((item.amount - item.net_amount), 3)
-        netAmount = round((grossAmount - tax), 3)
-    
+        raw_tax = round(abs_amount - abs_net_amount, 3)
+        grossAmount = -abs_amount                   ## Negative for EFRIS credit note
+        taxAmount = -raw_tax                        ## Negative for EFRIS credit note
+        netAmount = -round(abs_net_amount, 3)       ## Negative for EFRIS credit note
+        tax = -raw_tax                              ## Negative for EFRIS credit note
+
     return {
         "tax": tax,
         "grossAmount": grossAmount,
@@ -142,18 +148,22 @@ def calculate_item_amounts(item, tax_details):
 
 def build_goods_detail(item, amounts, tax_details, order_number):
     """
-    Build goods detail object for a single item (Credit Note format)
-    EFRIS expects NEGATIVE values for credit notes
+    Build goods detail object for a single item (Credit Note format).
+    EFRIS T110 rules:
+      - qty       → NEGATIVE (e.g. -2)
+      - unitPrice → POSITIVE (always the original unit price)
+      - total     → NEGATIVE
+      - tax       → NEGATIVE
     """
     return {
         "item": item.item_name,
         "itemCode": item.item_code,
-        "qty": item.qty,  ## Keep negative for credit notes
+        "qty": item.qty,                    ## ERPNext already stores return qty as negative
         "unitOfMeasure": item.custom_uom_codeefris,
-        "unitPrice": item.rate,
-        "total": item.amount,  ## Keep negative for credit notes
+        "unitPrice": abs(item.rate),        ## Always positive
+        "total": amounts["grossAmount"],    ## Negative (set in calculate_item_amounts)
         "taxRate": tax_details["tax_rate"],
-        "tax": amounts["tax"],  ## Keep negative for credit notes
+        "tax": amounts["tax"],              ## Negative (set in calculate_item_amounts)
         "discountTotal": "",
         "discountTaxRate": "",
         "orderNumber": str(order_number),
@@ -197,7 +207,7 @@ def process_credit_note_items(items):
         ## Extract calculated values (keep negative)
         taxAmount = amounts["taxAmount"]
         netAmount = amounts["netAmount"]
-        grossAmount = item.amount
+        grossAmount = amounts["grossAmount"]  ## Use calculated negative value, not item.amount
         
         ## Update or create tax category
         if item.item_tax_template in tax_categories:
@@ -276,14 +286,18 @@ def build_basic_information(efris_settings, doc):
 
 
 def build_summary(doc, item_count):
-    """Build summary section for credit note - use negative values"""
-    ## EFRIS expects NEGATIVE values in summary for credit notes
-    total_tax_amount = round(doc.total - doc.net_total, 3)
-    
+    """
+    Build summary section for credit note.
+    All monetary values must be NEGATIVE for EFRIS credit notes.
+    """
+    abs_total = abs(doc.total)
+    abs_net_total = abs(doc.net_total)
+    total_tax_amount = round(abs_total - abs_net_total, 3)
+
     return {
-        "netAmount": round(doc.net_total, 3),      # Keep negative
-        "taxAmount": total_tax_amount,              # Keep negative
-        "grossAmount": round(doc.total, 3),         # Keep negative
+        "netAmount": -round(abs_net_total, 3),   ## Negative
+        "taxAmount": -total_tax_amount,           ## Negative
+        "grossAmount": -round(abs_total, 3),      ## Negative
         "itemCount": item_count,
         "modeCode": "0",
         "remarks": "We appreciate your continued support",
@@ -292,10 +306,10 @@ def build_summary(doc, item_count):
 
 
 def build_pay_way(doc):
-    """Build payment way section - use negative values"""
+    """Build payment way section — negative total for credit notes"""
     return {
         "paymentMode": "102",
-        "paymentAmount": doc.total,  ## Keep negative value for credit notes
+        "paymentAmount": -abs(doc.total),  ## Always negative for credit notes
         "orderNumber": "a",
     }
 
@@ -320,8 +334,30 @@ def build_credit_note_data(efris_settings, doc, datetime_combined):
     if not goods_details:
         raise EFRISIntegrationError("No items found in the credit note")
     
-    ## Log goods details for debugging
-    frappe.logger().info(f"Credit Note Goods Details: {json.dumps(goods_details, indent=2)}")
+    ## Log raw item values AND final goods_details for qty troubleshooting
+    frappe.log_error(
+        title="EFRIS T110 - Goods Details Debug",
+        message=json.dumps({
+            "raw_items": [
+                {
+                    "item_code": i.item_code,
+                    "item_name": i.item_name,
+                    "qty_raw": i.qty,
+                    "rate_raw": i.rate,
+                    "amount_raw": i.amount,
+                    "net_amount_raw": i.net_amount,
+                }
+                for i in doc.items
+            ],
+            "goods_details_sent_to_efris": goods_details,
+            "tax_details_sent_to_efris": tax_categories_list,
+            "doc_total": doc.total,
+            "doc_net_total": doc.net_total,
+            "return_against": doc.return_against,
+            "custom_invoice_number": doc.custom_invoice_number,
+            "custom_fdn": doc.custom_fdn,
+        }, indent=2, default=str)
+    )
     
     ## Build credit note data structure
     credit_note_data = {
@@ -565,17 +601,14 @@ def handle_efris_response(doc, response_data, headers, server_url, data_to_post)
 def process_credit_note(doc, event):
     """
     Hook for Sales Invoice (Return) submission to EFRIS using T110 interface
-    
-    This function should be called when a return sales invoice is submitted
+
+    This function should be called when a return sales invoice is submitted.
+    Only runs when the 'is_return' field is checked on the Sales Invoice.
     """
     ## Only process if it's a return (credit note)
-    # if not doc.is_return:
-    #     return
-    
-    ## Skip if not EFRIS invoice
-    # if not doc.custom_efris_invoice:
-    #     return
-    
+    if not doc.is_return:
+        return
+
     try:
         ## Validate against original invoice if return_against is set
         if doc.return_against:
