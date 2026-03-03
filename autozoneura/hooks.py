@@ -46,7 +46,8 @@ app_license = "mit"
 doctype_js = {
     "Item": [
         "public/js/goods_configuration.js",
-        "public/js/efris_stock_button.js"
+        "public/js/efris_stock_button.js",
+        # "public/js/efris_sync_items.js"
     ],
     "Customer": "public/js/get_tax_payer_information.js",
     "Sales Invoice":[
@@ -158,7 +159,8 @@ doctype_js = {
 
 doc_events = {
     "Item": {
-        "validate": "autozoneura.custom_scripts.goods_configuration.on_save"
+        "validate": "autozoneura.custom_scripts.goods_configuration.on_save",
+        "on_save": "autozoneura.custom_scripts.goods_configuration.on_save_bulk_sync"
     },
     "Purchase Receipt": {
         "on_submit": "autozoneura.custom_scripts.stock_in.on_stock"
