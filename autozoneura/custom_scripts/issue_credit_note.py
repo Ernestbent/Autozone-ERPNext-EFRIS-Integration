@@ -363,7 +363,7 @@ def build_credit_note_data(efris_settings, doc, datetime_combined):
     credit_note_data = {
         "oriInvoiceId": doc.custom_invoice_number,
         "oriInvoiceNo": doc.custom_fdn,
-        "reasonCode": "102",  # Default reason code - can be made dynamic
+        "reasonCode": "105",  # Default reason code - can be made dynamic
         "reason": doc.custom_reason,
         "applicationTime": datetime_combined,
         "invoiceApplyCategoryCode": "101",

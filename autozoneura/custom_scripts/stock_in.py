@@ -169,23 +169,36 @@ def send_efris_request(server_url, data_to_post):
     except requests.exceptions.RequestException as e:
         raise Exception(f"API Error: {str(e)}")
 
-def handle_efris_response(doc, response_data, server_url, data_to_post):
-    """Process response, log, and update document."""
+def handle_efris_response(doc, status_code, response_data, server_url, data_to_post):
+    """
+    Process response, log, and update document.
+    
+    ✅ SUCCESS: Log as Completed, save document, show message
+    ❌ FAILURE: Log as Failed, throw error, prevent submission
+    """
     return_message = response_data.get("returnStateInfo", {}).get("returnMessage", "")
     
-    status = 'Completed' if response_data.get("status_code") == 200 else 'Failed' 
-    log_integration_request(status, server_url, {}, data_to_post, response_data, return_message)
+    # Check if SUCCESS (must be both 200 status AND SUCCESS message)
+    is_success = return_message == "SUCCESS" and status_code == 200
+    log_status = 'Completed' if is_success else 'Failed'
+    
+    # Log the request
+    log_integration_request(log_status, server_url, {}, data_to_post, response_data, return_message)
     
     # Store in custom fields
     doc.custom_post_request = json.dumps(data_to_post, indent=4)
     doc.custom_response_ = json.dumps(response_data, indent=4)
     doc.custom_return_status = return_message
-    doc.save()
     
-    if return_message == "SUCCESS":
-        frappe.msgprint("Stock successfully recorded in EFRIS")
+    if is_success:
+        doc.save()
+        frappe.msgprint("✓ Stock successfully recorded in EFRIS")
     else:
-        frappe.msgprint(f"EFRIS Response: {return_message}. Details in Integration Request.", title="EFRIS API", indicator="orange")
+        # Don't save on failure - throw error to prevent submission
+        frappe.throw(
+            title="EFRIS Stock Submission Failed",
+            msg=f"Error: {return_message}"
+        )
 
 ## Main Hook
 def on_stock(doc, event):
@@ -199,11 +212,12 @@ def on_stock(doc, event):
         data_to_post = build_request_data(payload, settings, doc)
         server_url = settings["server_url"]
         
+        # Send request and get status code + response
         status_code, response_data = send_efris_request(server_url, data_to_post)
-        handle_efris_response(doc, response_data, server_url, data_to_post)
+        
+        # Handle response (saves on success, throws on failure)
+        handle_efris_response(doc, status_code, response_data, server_url, data_to_post)
         
     except Exception as e:
         error_msg = str(e)
-        settings = get_efris_settings()  # Safe re-fetch for logging
-        log_integration_request('Failed', settings["server_url"], {}, data_to_post if 'data_to_post' in locals() else {}, {}, error_msg)
         frappe.throw(error_msg)

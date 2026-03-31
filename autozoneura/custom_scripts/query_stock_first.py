@@ -1,9 +1,10 @@
 import frappe
 import json
 import requests
+import gzip
+import base64
 from frappe import _
 from datetime import datetime, timezone, timedelta
-import base64
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 from autozoneura.autozoneura.background_tasks.encryption import encrypt_dynamic_json
@@ -51,30 +52,75 @@ def log_integration_request(status, url, headers, data, response, service=""):
 
 
 def decrypt_aes_content(encrypted_content, aes_key):
-    """Decrypt AES encrypted content from EFRIS"""
+    """
+    Decrypt AES encrypted content from EFRIS
+    Order: Base64 → GZIP → AES → JSON
+    """
     try:
+        import gzip
+        from Crypto.Cipher import AES
+        from Crypto.Util.Padding import unpad
+        
         aes_key_bytes = bytes.fromhex(aes_key)
-        encrypted_data = base64.b64decode(encrypted_content)
+        
+        # Step 1: Base64 decode
+        compressed_bytes = base64.b64decode(encrypted_content)
+        
+        # Step 2: GZIP decompress with fallback
+        try:
+            encrypted_bytes = gzip.decompress(compressed_bytes)
+        except Exception as gzip_error:
+            # Try removing trailing bytes if gzip fails
+            for i in range(1, 5):
+                try:
+                    encrypted_bytes = gzip.decompress(compressed_bytes[:-i])
+                    break
+                except:
+                    continue
+            else:
+                frappe.log_error(f"GZIP decompress failed: {str(gzip_error)}", "EFRIS GZIP Error")
+                raise Exception(f"GZIP decompress failed: {str(gzip_error)}")
+        
+        # Step 3: Handle AES block alignment
+        remainder = len(encrypted_bytes) % 16
+        if remainder != 0:
+            encrypted_bytes = encrypted_bytes[:-remainder]
+        
+        # Step 4: AES decrypt (ECB mode)
         cipher = AES.new(aes_key_bytes, AES.MODE_ECB)
-        decrypted_data = unpad(cipher.decrypt(encrypted_data), AES.block_size)
-        return json.loads(decrypted_data.decode('utf-8'))
+        decrypted_padded = cipher.decrypt(encrypted_bytes)
+        
+        # Step 5: Remove PKCS7 padding
+        try:
+            decrypted_data = unpad(decrypted_padded, AES.block_size)
+        except ValueError:
+            decrypted_data = decrypted_padded
+        
+        # Step 6: Parse JSON
+        try:
+            result = json.loads(decrypted_data.decode('utf-8'))
+        except UnicodeDecodeError:
+            result = json.loads(decrypted_data.decode('latin-1'))
+        
+        return result
+        
     except Exception as e:
         frappe.log_error(f"Decryption error: {str(e)}", "EFRIS Decryption")
-        frappe.throw(_("Failed to decrypt EFRIS response"))
+        frappe.throw(_("Failed to decrypt EFRIS response: {0}").format(str(e)))
 
 
 def build_t127_request(payload, settings):
     """Build T127 request with encryption - T127 returns all configured items"""
-    ## Encrypt payload
+    # Encrypt payload
     encrypted_result = encrypt_dynamic_json(payload)
     if not encrypted_result.get("success"):
         frappe.throw(_(f"Encryption failed: {encrypted_result.get('error')}"))
     
-    ## Generate unique IDs
+    # Generate unique IDs
     data_exchange_id = frappe.generate_hash(length=32)
     current_time = datetime.now(eat_timezone).strftime("%Y-%m-%d %H:%M:%S")
     
-    ## Build request
+    # Build request
     return {
         "data": {
             "content": encrypted_result["encrypted_content"],
@@ -89,7 +135,7 @@ def build_t127_request(payload, settings):
             "appId": "AP04",
             "version": "1.1.20191201",
             "dataExchangeId": data_exchange_id,
-            "interfaceCode": "T127",  ## T127 returns all configured items
+            "interfaceCode": "T127",  # T127 returns all configured items
             "requestCode": "TP",
             "requestTime": current_time,
             "responseCode": "TA",
@@ -132,7 +178,7 @@ def send_efris_request(server_url, request_data):
 
 def get_efris_stock_all(settings):
     """Query ALL configured items from EFRIS using T127 interface"""
-    ## Build request payload for T127
+    # Build request payload for T127
     payload = {
         "pageNo": "",
         "pageSize": ""
@@ -140,22 +186,22 @@ def get_efris_stock_all(settings):
     
     request_data = build_t127_request(payload, settings)
     
-    ## Send request
+    # Send request
     try:
         response_data = send_efris_request(settings['url'], request_data)
     except Exception as e:
         frappe.throw(_(f"EFRIS request failed: {str(e)}"))
     
-    ## Log request
+    # Log request
     log_integration_request('Completed', settings['url'], {}, request_data, response_data, "T127 Stock Query")
     
-    ## Check response status
+    # Check response status
     return_message = response_data.get("returnStateInfo", {}).get("returnMessage", "")
     
     if return_message != "SUCCESS":
         frappe.throw(_(f"EFRIS returned error: {return_message}"))
     
-    ## Decrypt response
+    # Decrypt response
     data = response_data.get("data", {})
     encrypted_content = data.get("content", "")
     
@@ -180,20 +226,20 @@ def validate_invoice_stock_before_efris(invoice_name):
         dict: Validation results with stock comparison
     """
     try:
-        ## Get Sales Invoice
+        # Get Sales Invoice
         invoice = frappe.get_doc("Sales Invoice", invoice_name)
         
         if not invoice.items:
             frappe.throw(_("No items found in invoice"))
         
-        ## Get EFRIS settings
+        # Get EFRIS settings
         settings = get_efris_settings()
         
-        ## Query ALL stock from EFRIS
+        # Query ALL stock from EFRIS
         frappe.msgprint("Querying EFRIS stock...", alert=True)
         stock_response = get_efris_stock_all(settings)
         
-        ## Build stock lookup from EFRIS response
+        # Build stock lookup from EFRIS response
         stock_lookup = {}
         records = stock_response.get('records', [])
         
@@ -206,19 +252,17 @@ def validate_invoice_stock_before_efris(invoice_name):
                 'unit_price': record.get('unitPrice', 0)
             }
         
-        # frappe.msgprint(f"Retrieved stock for {len(stock_lookup)} items from EFRIS", alert=True)
-        
-        ## Build items map from invoice (using item_code as goodsCode)
+        # Build items map from invoice (using item_code as goodsCode)
         items_map = {}
         
         for item in invoice.items:
-            ## Use item_code as the goods code
+            # Use item_code as the goods code
             goods_code = item.item_code
             
             if not goods_code:
                 frappe.throw(_(f"Item {item.item_name} (Row {item.idx}) has no item code"))
             
-            ## Store or update item info
+            # Store or update item info
             if goods_code in items_map:
                 items_map[goods_code]['qty'] += item.qty
                 items_map[goods_code]['rows'].append(item.idx)
@@ -229,7 +273,7 @@ def validate_invoice_stock_before_efris(invoice_name):
                     'rows': [item.idx]
                 }
         
-        ## Validate each invoice item against EFRIS stock
+        # Validate each invoice item against EFRIS stock
         out_of_stock = []
         sufficient_stock = []
         missing_items = []
@@ -238,7 +282,7 @@ def validate_invoice_stock_before_efris(invoice_name):
             item_name = item_info['item_name']
             required_qty = item_info['qty']
             
-            ## Check if item exists in EFRIS
+            # Check if item exists in EFRIS
             if goods_code not in stock_lookup:
                 missing_items.append({
                     'goods_code': goods_code,
@@ -247,10 +291,10 @@ def validate_invoice_stock_before_efris(invoice_name):
                 })
                 continue
             
-            ## Get available stock
+            # Get available stock
             available_stock = stock_lookup[goods_code]['stock']
             
-            ## Check if sufficient
+            # Check if sufficient
             if available_stock < required_qty:
                 shortage = required_qty - available_stock
                 out_of_stock.append({
@@ -268,7 +312,7 @@ def validate_invoice_stock_before_efris(invoice_name):
                     'available': available_stock
                 })
         
-        ## Display success messages
+        # Display success messages
         if sufficient_stock:
             success_items = "<br>".join([
                 f"✅ {item['goods_code']}: <span style='color: green; font-weight: bold;'>{item['available']}</span> available"
@@ -276,7 +320,7 @@ def validate_invoice_stock_before_efris(invoice_name):
             ])
             frappe.msgprint(success_items, title="Validation Passed", indicator='green')
         
-        ## If any items missing or out of stock, throw error
+        # If any items missing or out of stock, throw error
         if missing_items or out_of_stock:
             error_details = []
             
@@ -298,17 +342,7 @@ def validate_invoice_stock_before_efris(invoice_name):
             
             frappe.throw("".join(error_details), title="Stock Validation Failed")
         
-        ## All items have sufficient stock
-        # success_message = f"""
-        # <div style="padding: 15px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 5px;">
-        #     <h4 style="color: #155724; margin-top: 0;">✅ Stock Validation Passed!</h4>
-        #     <p>All {len(sufficient_stock)} item(s) have sufficient stock in EFRIS.</p>
-        #     <p><b>Invoice {invoice_name} is ready for submission.</b></p>
-        # </div>
-        # """
-        
-        # frappe.msgprint(success_message, title="Validation Success", indicator='green')
-        
+        # All items have sufficient stock
         return {
             "success": True,
             "invoice_name": invoice_name,

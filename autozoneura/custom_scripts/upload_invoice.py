@@ -576,7 +576,7 @@ def submit_to_efris(efris_settings, data_to_post):
 def handle_efris_response(doc, response_data, headers, server_url, data_to_post):
     """
     Handle EFRIS API response
-    
+    Only saves document on SUCCESS - otherwise throws error to prevent submission
     """
     ## Store response in document
     doc.custom_response = json.dumps(response_data, indent=4)
@@ -597,80 +597,90 @@ def handle_efris_response(doc, response_data, headers, server_url, data_to_post)
         
         ## Log successful request
         log_integration_request('Completed', server_url, headers, data_to_post, response_data)
+        
+        ## ONLY save on success
         doc.save()
     else:
         ## Log failed request
         log_integration_request('Failed', server_url, headers, data_to_post, response_data, return_message)
-        frappe.throw(title="Oops! API Error", msg=return_message)
+        ## THROW ERROR - prevents submission, document stays in draft
+        frappe.throw(
+            title="EFRIS Submission Failed",
+            msg=return_message
+        )
 
 
 def on_send(doc, event):
     """
     Main entry point for ALL EFRIS submissions
     Routes invoices to T109 and credit notes to T110
+    
+    KEY LOGIC: Only doc.save() is called on SUCCESS
+    If any error occurs, frappe.throw() prevents submission
     """
     ## Skip if not EFRIS invoice
     # if not doc.custom_efris_invoice:
     #     return
     
-    ## Route based on document type
-    if doc.is_return:
-        # No import here anymore - already imported at top
-        process_credit_note(doc, event)
-        return
-    
-    # Only process regular invoices below
-    process_regular_invoice(doc)
+    try:
+        ## Route based on document type
+        if doc.is_return:
+            process_credit_note(doc, event)
+            return
+        
+        # Process regular invoices
+        process_regular_invoice(doc)
+        
+    except Exception as e:
+        ## frappe.throw() prevents document submission
+        ## Document stays in Draft status
+        frappe.throw(str(e))
 
 
 def process_regular_invoice(doc):
     """
     Process T109 regular invoice submission
+    
+    KEY LOGIC:
+    - If API returns SUCCESS: doc.save() is called -> document is submitted
+    - If API returns FAILURE: frappe.throw() is called -> document stays in Draft
+    - If network error: frappe.throw() is called -> document stays in Draft
     """
-    try:
-        ## Get EFRIS settings
-        efris_settings = get_efris_settings()
-        
-        ## Prepare datetime
-        datetime_combined = f"{doc.posting_date} {doc.posting_time}"
-        
-        ## Build invoice data
-        invoice_data, total_tax_amount, item_count = build_invoice_data(efris_settings, doc, datetime_combined)
-        
-        ## Encrypt invoice data
-        encrypted_result = encrypt_invoice_data(invoice_data)
-        
-        ## Build global info
-        global_info = build_global_info(
-            efris_settings, 
-            doc, 
-            total_tax_amount, 
-            invoice_data["goodsDetails"]
-        )
-        
-        ## Build complete POST data
-        data_to_post = build_post_data(encrypted_result, global_info)
-        
-        ## Store request in document
-        doc.custom_post_request = json.dumps(data_to_post, indent=4)
-        
-        ## Submit to EFRIS
-        response_data, headers, server_url = submit_to_efris(efris_settings, data_to_post)
-        
-        ## Handle response
-        handle_efris_response(doc, response_data, headers, server_url, data_to_post)
-        
-    except EFRISIntegrationError as e:
-        frappe.throw(str(e))
-        
-    except Exception as e:
-        error_msg = f"Unexpected error: {str(e)}"
-        frappe.log_error(
-            title="EFRIS Submission Error",
-            message=error_msg,
-            docstatus = 0 
-        )
-        frappe.throw(error_msg)
+    
+    ## Get EFRIS settings
+    efris_settings = get_efris_settings()
+    
+    ## Prepare datetime
+    datetime_combined = f"{doc.posting_date} {doc.posting_time}"
+    
+    ## Build invoice data
+    invoice_data, total_tax_amount, item_count = build_invoice_data(efris_settings, doc, datetime_combined)
+    
+    ## Encrypt invoice data
+    encrypted_result = encrypt_invoice_data(invoice_data)
+    
+    ## Build global info
+    global_info = build_global_info(
+        efris_settings, 
+        doc, 
+        total_tax_amount, 
+        invoice_data["goodsDetails"]
+    )
+    
+    ## Build complete POST data
+    data_to_post = build_post_data(encrypted_result, global_info)
+    
+    ## Store request in document
+    doc.custom_post_request = json.dumps(data_to_post, indent=4)
+    
+    ## Submit to EFRIS
+    response_data, headers, server_url = submit_to_efris(efris_settings, data_to_post)
+    
+    ## Handle response
+    ## KEY: handle_efris_response() either:
+    ##      - calls doc.save() on SUCCESS
+    ##      - calls frappe.throw() on FAILURE (prevents submission)
+    handle_efris_response(doc, response_data, headers, server_url, data_to_post)
 
 
 # Optional: Add validation function for hooks
